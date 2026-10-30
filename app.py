@@ -15,7 +15,7 @@ st.title("텍스트 음성 변환 서비스")
 text = st.text_area(
     "읽을 텍스트를 입력하세요",
     "안녕하세요. OpenAI 텍스트 음성 변환 실습입니다.",
-    height=100,
+    height=100
 )
 
 # 버튼
@@ -29,7 +29,7 @@ if st.button("음성 변환"):
             voice="nova",
             input=text
         )
-        audio_bytes =
+        audio_bytes = speech
 
         # 음성 출력
         st.markdown("### 🔊 음성 재생")
