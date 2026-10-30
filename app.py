@@ -33,4 +33,4 @@ if st.button("음성 변환"):
 
         # 음성 출력
         st.markdown("### 🔊 음성 재생")
-        st.audio(speech.content, format="audio/mp3")
+        st.audio(audio_bytes, format="audio/mp3")
