@@ -29,7 +29,7 @@ if st.button("음성 변환"):
             voice="nova",
             input=text
         )
-        audio_bytes = speech
+        audio_bytes = speech.content
 
         # 음성 출력
         st.markdown("### 🔊 음성 재생")
