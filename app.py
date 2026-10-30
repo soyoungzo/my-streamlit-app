@@ -27,7 +27,7 @@ if st.button("음성 변환"):
         speech = client.audio.speech.create(
             model="gpt-4o-mini-tts",
             voice="nova",
-            input=text.text
+            input=text
         )
         audio_bytes =
 
