@@ -19,8 +19,11 @@ sys_role = """
 오늘 하루를 준비할 수 있도록 친절하고 간결하게 안내합니다.
 
 답변은 다음 순서로 작성하세요.
-1. 해당 지역의 날씨 요약 (기온, 체감온도, 강수 여부)
-2. 미세먼지 상태 (PM10, PM2.5 수치와 등급)
+1. 해당 지역의 날씨 요약 (기온, 체감온도)
+   - 데이터에 [강수 확률]이 있을 때만 비·눈·우산을 언급하세요.
+   - [강수 확률]이 없으면 강수 확률, 비, 눈, 우산에 대해 아무 말도 하지 마세요.
+2. 미세먼지 상태
+   - 수치(숫자)는 절대 말하지 말고 '좋음', '보통', '나쁨', '매우 나쁨' 등급만 말하세요.
 3. 추천 의상
    - 반드시 [기온별 옷차림 가이드]에 있는 옷 중에서 추천하세요.
    - 현재 체감온도 기준 옷차림을 중심으로 안내하고,
@@ -231,17 +234,28 @@ def build_weather_summary(place, weather, air):
 
     weather_name = WEATHER_CODE.get(cur["weather_code"], "알 수 없음")
 
+    # 강수 확률이 30% 미만이면 아예 데이터에 넣지 않음
+    rain_prob = daily["precipitation_probability_max"][0] or 0
+    if rain_prob >= 30:
+        rain_text = "[강수 확률] " + str(rain_prob) + "%\n"
+    else:
+        rain_text = ""
+
+    # 현재 비/눈이 오고 있을 때만 강수량 포함
+    if cur["precipitation"] > 0:
+        precip_text = "[현재 강수량] " + str(cur["precipitation"]) + "mm\n"
+    else:
+        precip_text = ""
+
     summary = f"""
 [지역] {place}
 [현재 날씨] {weather_name}
 [현재 기온] {cur['temperature_2m']}도 (체감 {feels}도)
 [오늘 최저/최고 기온] {t_min}도 / {t_max}도 (일교차 {diff}도)
-[강수 확률] {daily['precipitation_probability_max'][0]}%
-[현재 강수량] {cur['precipitation']}mm
-[풍속] {cur['wind_speed_10m']}km/h
+{rain_text}{precip_text}[풍속] {cur['wind_speed_10m']}km/h
 [자외선 지수 최대] {daily['uv_index_max'][0]}
-[미세먼지 PM10] {pm10}㎍/㎥ ({grade_pm10(pm10)})
-[초미세먼지 PM2.5] {pm25}㎍/㎥ ({grade_pm25(pm25)})
+[미세먼지] {grade_pm10(pm10)}
+[초미세먼지] {grade_pm25(pm25)}
 
 [기온별 옷차림 가이드]
 - 현재 체감온도({feels}도) 기준: {now_text}
