@@ -31,7 +31,6 @@ sys_role = """
 
 주어진 데이터에 없는 수치는 지어내지 마세요.
 음성으로 읽을 내용이므로 이모지, 특수기호, 마크다운 표기는 쓰지 말고 자연스러운 문장으로 작성하세요.
-
 """
 
 # ---------------------------------------------------------
@@ -49,6 +48,29 @@ WEATHER_CODE = {
 
 
 # ---------------------------------------------------------
+# 미세먼지 등급 (한국 환경부 기준)
+# ---------------------------------------------------------
+def grade_pm10(v):
+    if v <= 30:
+        return "좋음"
+    if v <= 80:
+        return "보통"
+    if v <= 150:
+        return "나쁨"
+    return "매우 나쁨"
+
+
+def grade_pm25(v):
+    if v <= 15:
+        return "좋음"
+    if v <= 35:
+        return "보통"
+    if v <= 75:
+        return "나쁨"
+    return "매우 나쁨"
+
+
+# ---------------------------------------------------------
 # 기온별 옷차림 가이드 (첨부 이미지 기준)
 # (최저 기온 기준, 옷 목록, 추가 팁) - 높은 온도 구간부터 순서대로
 # ---------------------------------------------------------
@@ -58,8 +80,8 @@ CLOTHING_GUIDE = [
     (20, "얇은 가디건, 긴팔티, 면바지, 청바지", ""),
     (17, "얇은 니트, 가디건, 맨투맨, 얇은 자켓, 면바지, 청바지", ""),
     (12, "자켓, 가디건, 야상, 맨투맨, 니트, 스타킹, 청바지, 면바지", ""),
-    (9,  "자켓, 트렌치코트, 야상, 니트, 스타킹, 청바지, 면바지", "아우터 안에 가디건을 꼭 입으세요"),
-    (5,  "코트, 히트텍, 니트, 청바지, 레깅스", "레이어드(겹쳐 입기)가 필수예요"),
+    (9, "자켓, 트렌치코트, 야상, 니트, 스타킹, 청바지, 면바지", "아우터 안에 가디건을 꼭 입으세요"),
+    (5, "코트, 히트텍, 니트, 청바지, 레깅스", "레이어드(겹쳐 입기)가 필수예요"),
     (-100, "패딩, 두꺼운 코트, 목도리, 기모 제품", "최대한 많이 껴입으세요"),
 ]
 
@@ -69,23 +91,14 @@ def get_clothing(temp):
     for min_temp, clothes, tip in CLOTHING_GUIDE:
         if temp >= min_temp:
             return clothes, tip
+    return CLOTHING_GUIDE[-1][1], CLOTHING_GUIDE[-1][2]
 
 
-# ---------------------------------------------------------
-# 미세먼지 등급 (한국 환경부 기준)
-# ---------------------------------------------------------
-def grade_pm10(v):
-    if v <= 30: return "좋음"
-    if v <= 80: return "보통"
-    if v <= 150: return "나쁨"
-    return "매우 나쁨"
-
-
-def grade_pm25(v):
-    if v <= 15: return "좋음"
-    if v <= 35: return "보통"
-    if v <= 75: return "나쁨"
-    return "매우 나쁨"
+def with_tip(clothes, tip):
+    """옷 목록 뒤에 팁이 있으면 괄호로 붙여서 반환"""
+    if tip:
+        return clothes + " (" + tip + ")"
+    return clothes
 
 
 # ---------------------------------------------------------
@@ -140,7 +153,8 @@ def geocode(location):
 def get_weather(lat, lon):
     url = "https://api.open-meteo.com/v1/forecast"
     params = {
-        "latitude": lat, "longitude": lon,
+        "latitude": lat,
+        "longitude": lon,
         "current": "temperature_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m",
         "daily": "temperature_2m_max,temperature_2m_min,precipitation_probability_max,uv_index_max",
         "timezone": "auto",
@@ -152,7 +166,8 @@ def get_weather(lat, lon):
 def get_air_quality(lat, lon):
     url = "https://air-quality-api.open-meteo.com/v1/air-quality"
     params = {
-        "latitude": lat, "longitude": lon,
+        "latitude": lat,
+        "longitude": lon,
         "current": "pm10,pm2_5",
         "timezone": "auto",
     }
@@ -171,15 +186,22 @@ def build_weather_summary(place, weather, air):
     # 기온대별 옷차림 (체감 / 아침·저녁 / 낮)
     now_clothes, now_tip = get_clothing(feels)
     morning_clothes, morning_tip = get_clothing(t_min)
-    day_clothes, _ = get_clothing(t_max)
+    day_clothes, day_tip = get_clothing(t_max)
 
-    diff_note = ""
+    now_text = with_tip(now_clothes, now_tip)
+    morning_text = with_tip(morning_clothes, morning_tip)
+    day_text = with_tip(day_clothes, day_tip)
+
     if diff >= 10:
-        diff_note = f"일교차가 {diff}도로 큽니다. 벗고 입기 편한 겉옷을 챙기세요."
+        diff_text = "일교차가 " + str(diff) + "도로 큽니다. 벗고 입기 편한 겉옷을 챙기세요."
+    else:
+        diff_text = "일교차가 크지 않습니다."
 
-    return f"""
+    weather_name = WEATHER_CODE.get(cur["weather_code"], "알 수 없음")
+
+    summary = f"""
 [지역] {place}
-[현재 날씨] {WEATHER_CODE.get(cur['weather_code'], '알 수 없음')}
+[현재 날씨] {weather_name}
 [현재 기온] {cur['temperature_2m']}도 (체감 {feels}도)
 [오늘 최저/최고 기온] {t_min}도 / {t_max}도 (일교차 {diff}도)
 [강수 확률] {daily['precipitation_probability_max'][0]}%
@@ -190,12 +212,12 @@ def build_weather_summary(place, weather, air):
 [초미세먼지 PM2.5] {pm25}㎍/㎥ ({grade_pm25(pm25)})
 
 [기온별 옷차림 가이드]
-- 현재 체감온도({feels}도) 기준: {now_clothes} {('(' + now_tip + ')') if now_tip else ''}
-- 아침/저녁 최저기온({t_min}도) 기준: {morning_clothes} {('(' + morning_tip + ')') if morning_tip else ''}
-- 낮 최고기온({t_max}도) 기준: {day_clothes}
-- 일교차 안내: {diff_note if diff_note else '일교차가 크지 않습니다.'}
+- 현재 체감온도({feels}도) 기준: {now_text}
+- 아침/저녁 최저기온({t_min}도) 기준: {morning_text}
+- 낮 최고기온({t_max}도) 기준: {day_text}
+- 일교차 안내: {diff_text}
 """
-"""
+    return summary
 
 
 # ---------------------------------------------------------
@@ -211,8 +233,10 @@ def make_answer(question, weather_summary):
 """
     res = client.responses.create(
         model="gpt-4o-mini",
-        input=[{"role": "system", "content": sys_role},
-               {"role": "user", "content": prompt}],
+        input=[
+            {"role": "system", "content": sys_role},
+            {"role": "user", "content": prompt},
+        ],
     )
     return res.output_text
 
@@ -252,7 +276,7 @@ if audio is not None:
             geo = geocode(location)
 
             if geo is None:
-                answer = f"죄송해요, '{location}' 지역을 찾지 못했어요. 지역 이름을 다시 말씀해 주세요."
+                answer = "죄송해요, " + location + " 지역을 찾지 못했어요. 지역 이름을 다시 말씀해 주세요."
             else:
                 weather = get_weather(geo["lat"], geo["lon"])
                 air = get_air_quality(geo["lat"], geo["lon"])
@@ -263,13 +287,15 @@ if audio is not None:
             mp3 = text_to_speech(answer)
 
         st.session_state["result"] = {
-            "question": question, "answer": answer, "mp3": mp3,
+            "question": question,
+            "answer": answer,
+            "mp3": mp3,
         }
 
 # 결과 출력 (텍스트 + 음성 동시)
 if "result" in st.session_state:
     r = st.session_state["result"]
-    st.markdown(f"**🎤 질문:** {r['question']}")
+    st.markdown("**🎤 질문:** " + r["question"])
     st.markdown("---")
     st.markdown(r["answer"])
     st.audio(r["mp3"], format="audio/mp3", autoplay=True)
