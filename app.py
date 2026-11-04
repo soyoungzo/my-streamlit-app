@@ -14,6 +14,7 @@ st.set_page_config(
     page_title="Thumbs Up | AI Voice Assistant",
     page_icon="🎙️",
     layout="wide",
+    initial_sidebar_state="collapsed",
 )
 
 # API 키: Streamlit Cloud > Settings > Secrets 에 OPENAI_API_KEY = "sk-..." 로 저장
@@ -373,7 +374,7 @@ VOICES = {
 
 CSS = """
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;800&display=swap');
-html, body, .stApp, .stApp * { font-family: 'Noto Sans KR', sans-serif; }
+html, body, .stApp, .stApp *:not([data-testid="stIconMaterial"]) { font-family: 'Noto Sans KR', sans-serif; }
 .stApp { background: linear-gradient(160deg, #fdfcff 0%, #f6f2ff 55%, #fff4fb 100%); }
 header[data-testid="stHeader"] { background: transparent; }
 .block-container { padding-top: 2.4rem; padding-bottom: 3rem; max-width: 1280px; }
@@ -405,10 +406,21 @@ header[data-testid="stHeader"] { background: transparent; }
 [data-testid="stFileUploader"] button { border-radius: 12px; border: 1px solid #d9d0f5; color: #6b52d9; background: #ffffff; }
 .stButton > button { border-radius: 999px; border: 1px solid #e3dcf7; background: #ffffff; color: #6b52d9; font-weight: 600; padding: 0.55rem 1.1rem; box-shadow: 0 4px 14px rgba(139, 108, 240, 0.08); }
 .stButton > button:hover { border-color: #b9a6f5; background: #f5f1ff; color: #5b45c4; }
-[data-testid="stVerticalBlockBorderWrapper"] { background: #ffffff; border: 1px solid #ece8f7; border-radius: 28px; box-shadow: 0 12px 40px rgba(139, 108, 240, 0.10); padding: 10px 12px; }
+.st-key-settings_panel { background: #ffffff; border: 1px solid #ece8f7; border-radius: 28px; box-shadow: 0 12px 40px rgba(139, 108, 240, 0.10); padding: 22px 24px; }
 .tu-panel-title { color: #1f2033; font-size: 1.25rem; font-weight: 800; padding-bottom: 12px; border-bottom: 1px solid #efebfa; margin-bottom: 16px; }
 .tu-panel-sec { color: #1f2033; font-size: 0.98rem; font-weight: 700; margin: 18px 0 6px 0; }
 [data-testid="stAudio"] audio { width: 100%; border-radius: 999px; background: #f5f1ff; }
+[data-testid="stSidebar"] { background: #ffffff; border-right: 1px solid #ece8f7; }
+.tu-brand { color: #1f2033; font-size: 1.25rem; font-weight: 800; margin-top: 6px; }
+.tu-brand span { color: #8b6cf0; font-size: 0.8rem; font-weight: 500; margin-left: 8px; }
+.tu-menu-title { color: #8a86a3; font-size: 0.8rem; font-weight: 600; margin: 24px 0 10px 0; }
+.tu-menu-item { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; border-radius: 14px; margin-bottom: 6px; color: #34344a; font-size: 0.95rem; font-weight: 500; }
+.tu-menu-item.active { background: #f1ecff; color: #5b45c4; font-weight: 700; }
+.tu-menu-item.disabled { color: #a9a6bd; }
+.tu-badge { font-size: 0.7rem; background: #f6f4fb; color: #8a86a3; border-radius: 99px; padding: 2px 9px; font-weight: 500; }
+.st-key-hero { position: fixed; right: 0; bottom: 0; width: min(46vw, 82vh); z-index: 0; pointer-events: none; margin: 0; padding: 0; }
+.st-key-hero img { display: block; width: 100%; height: auto; }
+@media (max-width: 900px) { .st-key-hero { display: none; } }
 """
 st.markdown("<style>" + CSS + "</style>", unsafe_allow_html=True)
 
@@ -450,6 +462,31 @@ st.session_state.setdefault("pref_voice", "nova")
 st.session_state.setdefault("audio_n", 0)
 
 # ---------------------------------------------------------
+# 사이드 메뉴 (추후 기능은 MENU_ITEMS에 한 줄씩 추가)
+# (아이콘, 메뉴 이름, 사용 가능 여부)
+# ---------------------------------------------------------
+MENU_ITEMS = [
+    ("🌤️", "날씨 비서", True),
+    ("📝", "회의록 분석 (요약·업무 정리)", False),
+    ("⚠️", "업무 리스크 점검", False),
+    ("✉️", "이메일 작성 및 발송", False),
+]
+
+menu_html = '<div class="tu-brand">Thumbs Up<span>Voice AI Assistant</span></div>'
+menu_html += '<div class="tu-menu-title">기능</div>'
+for icon, name, enabled in MENU_ITEMS:
+    if enabled:
+        menu_html += '<div class="tu-menu-item active"><div>' + icon + ' ' + name + '</div></div>'
+    else:
+        menu_html += (
+            '<div class="tu-menu-item disabled"><div>' + icon + ' ' + name + '</div>'
+            '<div class="tu-badge">준비 중</div></div>'
+        )
+
+with st.sidebar:
+    st.markdown(menu_html, unsafe_allow_html=True)
+
+# ---------------------------------------------------------
 # 상단: 타이틀 + 설정 버튼
 # ---------------------------------------------------------
 head_left, head_right = st.columns([5, 1])
@@ -480,7 +517,7 @@ with left:
 
 with right:
     if st.session_state["show_settings"]:
-        with st.container(border=True):
+        with st.container(border=False, key="settings_panel"):
             st.markdown('<div class="tu-panel-title">⚙️ 설정 및 도구</div>', unsafe_allow_html=True)
 
             st.markdown('<div class="tu-panel-sec">답변 방식</div>', unsafe_allow_html=True)
@@ -511,13 +548,15 @@ with right:
                 st.rerun()
             st.caption("설정은 현재 브라우저 세션에서 유지됩니다.")
     else:
-        if os.path.exists(ASSISTANT_IMG):
-            st.image(ASSISTANT_IMG, width="stretch")
-        else:
-            st.markdown(
-                '<div style="font-size:7rem; text-align:center; padding-top:60px;">🎙️</div>',
-                unsafe_allow_html=True,
-            )
+        # 화면 오른쪽 아래에 붙여서 크게 표시 (CSS: .st-key-hero)
+        with st.container(key="hero"):
+            if os.path.exists(ASSISTANT_IMG):
+                st.image(ASSISTANT_IMG, width="stretch")
+            else:
+                st.markdown(
+                    '<div style="font-size:7rem; text-align:center;">🎙️</div>',
+                    unsafe_allow_html=True,
+                )
 
 # ---------------------------------------------------------
 # 안내 배너 초기 상태
