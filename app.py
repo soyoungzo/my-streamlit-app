@@ -1,5 +1,7 @@
 
+import html
 import json
+import os
 import time
 import requests
 import streamlit as st
@@ -8,9 +10,13 @@ from openai import OpenAI
 # ---------------------------------------------------------
 # 기본 설정
 # ---------------------------------------------------------
-st.set_page_config(page_title="에이블 날씨 비서", page_icon="🌤️")
+st.set_page_config(
+    page_title="Thumbs Up | AI Voice Assistant",
+    page_icon="🎙️",
+    layout="wide",
+)
 
-# API 키: .streamlit/secrets.toml 에 OPENAI_API_KEY = "sk-..." 로 저장
+# API 키: Streamlit Cloud > Settings > Secrets 에 OPENAI_API_KEY = "sk-..." 로 저장
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"], timeout=30.0, max_retries=1)
 
 # 역할 부여
@@ -314,7 +320,7 @@ def build_weather_summary(place, weather, air):
 # ---------------------------------------------------------
 # 5) 답변 생성 (LLM)
 # ---------------------------------------------------------
-def make_answer(question, weather_summary):
+def make_answer(question, weather_summary, memo=""):
     prompt = f"""
 [김 대리의 질문]
 {question}
@@ -322,6 +328,11 @@ def make_answer(question, weather_summary):
 [조회된 날씨 데이터]
 {weather_summary}
 """
+    # 첨부한 TXT 메모가 있으면 참고 자료로 함께 전달
+    if memo:
+        prompt += "\n[첨부 메모]\n" + memo + "\n"
+        prompt += "(첨부 메모는 참고용입니다. 오늘 날씨와 관련된 일정이 있을 때만 준비물에 반영하세요.)\n"
+
     res = client.responses.create(
         model="gpt-4o-mini",
         input=[
@@ -335,24 +346,190 @@ def make_answer(question, weather_summary):
 # ---------------------------------------------------------
 # 6) 텍스트 → 음성 (TTS)
 # ---------------------------------------------------------
-def text_to_speech(text):
+def text_to_speech(text, voice="nova"):
     speech = client.audio.speech.create(
         model="gpt-4o-mini-tts",
-        voice="nova",
+        voice=voice,
         input=text,
         instructions="친절하고 또렷한 비서의 톤으로 읽어주세요",
     )
     return speech.content  # mp3 bytes
 
 
-# ---------------------------------------------------------
-# Streamlit 화면
-# ---------------------------------------------------------
-st.title("🌤️ 에이블 날씨 비서")
-st.caption("마이크 버튼을 누르고 '오늘 서울의 날씨는 어때?'처럼 물어보세요.")
+# =========================================================
+# 화면 디자인 (CSS)
+# =========================================================
+ASSISTANT_IMG = "assistant.png"  # 비서 캐릭터 이미지 (app.py와 같은 폴더에 저장)
 
-audio = st.audio_input("질문 녹음하기")
+ANSWER_MODES = ["음성 + 텍스트", "텍스트만", "음성만"]
+VOICES = {
+    "nova": "Nova (기본)",
+    "alloy": "Alloy",
+    "shimmer": "Shimmer",
+    "coral": "Coral",
+    "sage": "Sage",
+    "onyx": "Onyx",
+}
 
+CSS = """
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;800&display=swap');
+html, body, .stApp, .stApp * { font-family: 'Noto Sans KR', sans-serif; }
+.stApp { background: linear-gradient(160deg, #fdfcff 0%, #f6f2ff 55%, #fff4fb 100%); }
+header[data-testid="stHeader"] { background: transparent; }
+.block-container { padding-top: 2.4rem; padding-bottom: 3rem; max-width: 1280px; }
+.tu-title { font-size: 3.1rem; font-weight: 800; color: #1f2033; line-height: 1.22; margin: 0; letter-spacing: -0.02em; }
+.tu-title .tu-accent { background: linear-gradient(90deg, #8b6cf0, #e58be0); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.tu-sub { color: #7a7890; font-size: 1.05rem; margin: 14px 0 26px 0; }
+.tu-card { background: #ffffff; border: 1px solid #ece8f7; border-radius: 28px; box-shadow: 0 12px 40px rgba(139, 108, 240, 0.10); padding: 34px 38px; min-height: 300px; }
+.tu-placeholder { color: #bdb9d2; font-size: 1.9rem; font-weight: 500; padding-top: 6px; }
+.tu-label { color: #8a86a3; font-size: 0.85rem; font-weight: 500; margin-bottom: 8px; }
+.tu-question { color: #1f2033; font-size: 1.55rem; font-weight: 700; line-height: 1.5; }
+.tu-divider { height: 1px; background: #efebfa; margin: 22px 0 18px 0; }
+.tu-answer { color: #34344a; font-size: 1.12rem; line-height: 1.85; }
+.tu-wave { display: flex; align-items: center; gap: 0; margin: 22px 0 14px 0; height: 96px; }
+.tu-line { flex: 1; height: 4px; border-radius: 99px; animation: tu-breathe 3.2s ease-in-out infinite; }
+.tu-line.left { background: linear-gradient(90deg, rgba(168, 200, 255, 0), #a8c8ff); box-shadow: 0 6px 0 -1px rgba(168, 200, 255, 0.35); }
+.tu-line.right { background: linear-gradient(90deg, #f3a8e0, rgba(243, 168, 224, 0)); box-shadow: 0 -6px 0 -1px rgba(243, 168, 224, 0.35); animation-delay: 0.6s; }
+.tu-mic { width: 76px; height: 76px; border-radius: 50%; background: #ffffff; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 0 10px rgba(139, 108, 240, 0.08), 0 10px 30px rgba(139, 108, 240, 0.25); animation: tu-pulse 2.6s ease-in-out infinite; }
+@keyframes tu-breathe { 0%, 100% { opacity: 0.55; transform: scaleX(0.94); } 50% { opacity: 1; transform: scaleX(1); } }
+@keyframes tu-pulse { 0%, 100% { box-shadow: 0 0 0 8px rgba(139, 108, 240, 0.07), 0 10px 30px rgba(139, 108, 240, 0.22); } 50% { box-shadow: 0 0 0 16px rgba(139, 108, 240, 0.12), 0 10px 34px rgba(139, 108, 240, 0.32); } }
+.tu-status { margin-top: 10px; padding: 14px 18px; border-radius: 16px; text-align: center; font-size: 0.98rem; font-weight: 500; }
+.tu-idle { background: #f1ecff; color: #5b45c4; }
+.tu-busy { background: #ece4ff; color: #6b52d9; }
+.tu-done { background: #fdeef8; color: #b0408f; }
+.tu-error { background: #ffe9ef; color: #c0364f; }
+[data-testid="stAudioInput"] > div, [data-testid="stAudioInput"] { border-radius: 18px; }
+[data-testid="stAudioInput"] > div { background: #f3f0fb; border: 1px solid #ebe5fa; }
+[data-testid="stFileUploader"] section { background: #f6f4fb; border: 1px dashed #d9d0f5; border-radius: 18px; }
+[data-testid="stFileUploader"] label p { color: #5b5877; font-size: 0.9rem; font-weight: 500; }
+[data-testid="stFileUploader"] button { border-radius: 12px; border: 1px solid #d9d0f5; color: #6b52d9; background: #ffffff; }
+.stButton > button { border-radius: 999px; border: 1px solid #e3dcf7; background: #ffffff; color: #6b52d9; font-weight: 600; padding: 0.55rem 1.1rem; box-shadow: 0 4px 14px rgba(139, 108, 240, 0.08); }
+.stButton > button:hover { border-color: #b9a6f5; background: #f5f1ff; color: #5b45c4; }
+[data-testid="stVerticalBlockBorderWrapper"] { background: #ffffff; border: 1px solid #ece8f7; border-radius: 28px; box-shadow: 0 12px 40px rgba(139, 108, 240, 0.10); padding: 10px 12px; }
+.tu-panel-title { color: #1f2033; font-size: 1.25rem; font-weight: 800; padding-bottom: 12px; border-bottom: 1px solid #efebfa; margin-bottom: 16px; }
+.tu-panel-sec { color: #1f2033; font-size: 0.98rem; font-weight: 700; margin: 18px 0 6px 0; }
+[data-testid="stAudio"] audio { width: 100%; border-radius: 999px; background: #f5f1ff; }
+"""
+st.markdown("<style>" + CSS + "</style>", unsafe_allow_html=True)
+
+TITLE_HTML = (
+    '<div class="tu-title">Thumbs Up,<br>'
+    'Your <span class="tu-accent">professional</span> AI Voice Assistant</div>'
+    '<div class="tu-sub">당신만의 AI Voice Assistant ThumbsUp입니다.</div>'
+)
+
+MIC_SVG = (
+    '<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#8b6cf0" '
+    'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+    '<rect x="9" y="2" width="6" height="12" rx="3" fill="#8b6cf0"></rect>'
+    '<path d="M5 11a7 7 0 0 0 14 0"></path>'
+    '<line x1="12" y1="18" x2="12" y2="22"></line></svg>'
+)
+
+WAVE_HTML = (
+    '<div class="tu-wave"><div class="tu-line left"></div>'
+    '<div class="tu-mic">' + MIC_SVG + '</div>'
+    '<div class="tu-line right"></div></div>'
+)
+
+
+def show_status(placeholder, kind, text):
+    """하단 안내 배너 갱신 (kind: idle / busy / done / error)"""
+    placeholder.markdown(
+        '<div class="tu-status tu-' + kind + '">' + html.escape(text) + '</div>',
+        unsafe_allow_html=True,
+    )
+
+
+# ---------------------------------------------------------
+# 세션 상태 초기화
+# ---------------------------------------------------------
+st.session_state.setdefault("show_settings", False)
+st.session_state.setdefault("pref_mode", ANSWER_MODES[0])
+st.session_state.setdefault("pref_voice", "nova")
+st.session_state.setdefault("audio_n", 0)
+
+# ---------------------------------------------------------
+# 상단: 타이틀 + 설정 버튼
+# ---------------------------------------------------------
+head_left, head_right = st.columns([5, 1])
+with head_left:
+    st.markdown(TITLE_HTML, unsafe_allow_html=True)
+with head_right:
+    toggle_label = "설정 닫기 ✕" if st.session_state["show_settings"] else "⚙️ 설정"
+    if st.button(toggle_label, key="toggle_settings", width="stretch"):
+        st.session_state["show_settings"] = not st.session_state["show_settings"]
+        st.rerun()
+
+# ---------------------------------------------------------
+# 본문: 왼쪽(결과 카드 + 녹음/업로드) / 오른쪽(비서 이미지 또는 설정)
+# ---------------------------------------------------------
+left, right = st.columns([3, 2], gap="large")
+
+with left:
+    card_ph = st.empty()  # 결과 카드 자리 (처리 후 아래에서 채움)
+    st.markdown(WAVE_HTML, unsafe_allow_html=True)
+
+    mic_col, up_col = st.columns([1.15, 1], gap="medium")
+    with mic_col:
+        n = str(st.session_state["audio_n"])
+        audio = st.audio_input("질문 녹음", key="audio_" + n, label_visibility="collapsed")
+        status_ph = st.empty()
+    with up_col:
+        memo_file = st.file_uploader("파일 업로드", type=["txt"], key="memo_" + n)
+
+with right:
+    if st.session_state["show_settings"]:
+        with st.container(border=True):
+            st.markdown('<div class="tu-panel-title">⚙️ 설정 및 도구</div>', unsafe_allow_html=True)
+
+            st.markdown('<div class="tu-panel-sec">답변 방식</div>', unsafe_allow_html=True)
+            mode = st.radio(
+                "답변 방식",
+                ANSWER_MODES,
+                index=ANSWER_MODES.index(st.session_state["pref_mode"]),
+                label_visibility="collapsed",
+            )
+            st.session_state["pref_mode"] = mode
+
+            st.markdown('<div class="tu-panel-sec">음성 설정 (TTS)</div>', unsafe_allow_html=True)
+            voice_keys = list(VOICES.keys())
+            voice = st.selectbox(
+                "음성",
+                voice_keys,
+                index=voice_keys.index(st.session_state["pref_voice"]),
+                format_func=lambda k: VOICES[k],
+                label_visibility="collapsed",
+            )
+            st.session_state["pref_voice"] = voice
+
+            st.markdown('<div class="tu-panel-sec">기타 설정</div>', unsafe_allow_html=True)
+            if st.button("새 대화 시작", key="new_chat", width="stretch"):
+                st.session_state["audio_n"] += 1
+                st.session_state.pop("result", None)
+                st.session_state.pop("last_audio", None)
+                st.rerun()
+            st.caption("설정은 현재 브라우저 세션에서 유지됩니다.")
+    else:
+        if os.path.exists(ASSISTANT_IMG):
+            st.image(ASSISTANT_IMG, width="stretch")
+        else:
+            st.markdown(
+                '<div style="font-size:7rem; text-align:center; padding-top:60px;">🎙️</div>',
+                unsafe_allow_html=True,
+            )
+
+# ---------------------------------------------------------
+# 안내 배너 초기 상태
+# ---------------------------------------------------------
+if "result" in st.session_state:
+    show_status(status_ph, "done", "다시 질문하려면 녹음 버튼을 눌러주세요")
+else:
+    show_status(status_ph, "idle", "녹음 버튼을 눌러 질문해주세요")
+
+# ---------------------------------------------------------
+# 질문 처리
+# ---------------------------------------------------------
 if audio is not None:
     # 같은 녹음을 중복 처리하지 않도록 확인
     audio_bytes = audio.getvalue()
@@ -361,50 +538,81 @@ if audio is not None:
         st.session_state.pop("result", None)
 
         try:
-            with st.status("에이블이 처리 중이에요...", expanded=True) as status:
-                start = time.time()
+            start = time.time()
 
-                st.write("🎧 질문을 듣고 있어요...")
-                question = speech_to_text(audio)
-                st.write("✅ 질문 인식 완료 (" + str(round(time.time() - start, 1)) + "초)")
+            show_status(status_ph, "busy", "🎧 질문을 듣고 있어요...")
+            question = speech_to_text(audio)
 
-                st.write("🌍 지역과 날씨를 확인하고 있어요...")
-                location = extract_location(question)
+            show_status(status_ph, "busy", "🌍 지역과 날씨를 확인하고 있어요...")
+            location = extract_location(question)
 
-                if not location["korean"]:
-                    # 질문에서 지역을 알아듣지 못한 경우
-                    answer = "지역을 알아듣지 못했어요. 어느 지역의 날씨가 궁금한지 다시 말씀해 주세요."
+            if not location["korean"]:
+                # 질문에서 지역을 알아듣지 못한 경우
+                answer = "지역을 알아듣지 못했어요. 어느 지역의 날씨가 궁금한지 다시 말씀해 주세요."
+            else:
+                geo = geocode(location)
+                if geo is None:
+                    # 지역명은 알아들었지만 검색에서 찾지 못한 경우
+                    answer = location["korean"] + " 지역은 찾지 못했어요. 지역 이름을 다시 말씀해 주세요."
                 else:
-                    geo = geocode(location)
-                    if geo is None:
-                        # 지역명은 알아들었지만 검색에서 찾지 못한 경우
-                        answer = location["korean"] + " 지역은 찾지 못했어요. 지역 이름을 다시 말씀해 주세요."
-                    else:
-                        weather = get_weather(geo["lat"], geo["lon"])
-                        air = get_air_quality(geo["lat"], geo["lon"])
-                        summary = build_weather_summary(geo["name"], weather, air)
-                        st.write("✅ 날씨 확인 완료 (" + str(round(time.time() - start, 1)) + "초)")
-                        st.write("📝 답변을 작성하고 있어요...")
-                        answer = make_answer(question, summary)
+                    weather = get_weather(geo["lat"], geo["lon"])
+                    air = get_air_quality(geo["lat"], geo["lon"])
+                    summary = build_weather_summary(geo["name"], weather, air)
 
-                st.write("🔊 음성을 만들고 있어요...")
-                mp3 = text_to_speech(answer)
-                st.write("✅ 모두 완료 (" + str(round(time.time() - start, 1)) + "초)")
-                status.update(label="완료!", state="complete", expanded=False)
+                    memo_text = ""
+                    if memo_file is not None:
+                        memo_text = memo_file.getvalue().decode("utf-8", errors="ignore")[:3000]
+
+                    show_status(status_ph, "busy", "📝 답변을 작성하고 있어요...")
+                    answer = make_answer(question, summary, memo_text)
+
+            mp3 = None
+            if st.session_state["pref_mode"] != "텍스트만":
+                show_status(status_ph, "busy", "🔊 음성을 만들고 있어요...")
+                mp3 = text_to_speech(answer, st.session_state["pref_voice"])
 
             st.session_state["result"] = {
                 "question": question,
                 "answer": answer,
                 "mp3": mp3,
+                "played": False,
             }
+            elapsed = str(round(time.time() - start, 1))
+            show_status(status_ph, "done", "✅ 완료 (" + elapsed + "초) · 다시 질문하려면 녹음 버튼을 눌러주세요")
 
         except Exception as e:
-            st.error("처리 중 문제가 생겼어요. 다시 녹음해 주세요. (" + str(e) + ")")
+            show_status(status_ph, "error", "⚠️ 처리 중 문제가 생겼어요. 다시 녹음해 주세요.")
+            st.error(str(e))
 
-# 결과 출력 (텍스트 + 음성 동시)
-if "result" in st.session_state:
-    r = st.session_state["result"]
-    st.markdown("**🎤 질문:** " + r["question"])
-    st.markdown("---")
-    st.markdown(r["answer"])
-    st.audio(r["mp3"], format="audio/mp3", autoplay=True)
+# ---------------------------------------------------------
+# 결과 카드 출력 (텍스트 + 음성 동시)
+# ---------------------------------------------------------
+result = st.session_state.get("result")
+mode = st.session_state["pref_mode"]
+
+with card_ph.container():
+    if result is None:
+        st.markdown(
+            '<div class="tu-card"><div class="tu-placeholder">행복한 하루 되세요!</div></div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        card_html = (
+            '<div class="tu-card">'
+            '<div class="tu-label">🎤 내 말 · 음성 인식 결과</div>'
+            '<div class="tu-question">' + html.escape(result["question"]) + '</div>'
+        )
+        if mode != "음성만":
+            answer_html = html.escape(result["answer"]).replace("\n", "<br>")
+            card_html += (
+                '<div class="tu-divider"></div>'
+                '<div class="tu-label">Thumbs Up의 답변</div>'
+                '<div class="tu-answer">' + answer_html + '</div>'
+            )
+        card_html += '</div>'
+        st.markdown(card_html, unsafe_allow_html=True)
+
+        if mode != "텍스트만" and result["mp3"]:
+            # 새 답변일 때만 자동 재생 (설정을 열고 닫을 때 다시 재생되지 않도록)
+            st.audio(result["mp3"], format="audio/mp3", autoplay=not result["played"])
+            result["played"] = True
