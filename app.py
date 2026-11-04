@@ -117,21 +117,31 @@ def speech_to_text(audio_file):
 # 2) 질문에서 지역명 추출 (LLM)
 # ---------------------------------------------------------
 def extract_location(question):
+    empty = {"korean": "", "english": "", "province": "", "parent": ""}
+
     res = client.responses.create(
         model="gpt-4o-mini",
         input=[
             {"role": "system", "content":
-                "사용자 질문에서 날씨를 묻는 지역명만 추출해 "
-                'JSON으로만 답하세요. 예: {"location": "서울"} '
-                '지역이 없으면 {"location": "서울"} 로 답하세요.'},
+                "사용자 질문에서 날씨를 묻는 대한민국 지역을 추출해 JSON으로만 답하세요. "
+                "키는 korean(질문에 나온 지역명, 한글), english(그 지역의 영문 표기), "
+                "province(소속 시·도의 정식 명칭. 예: 서울특별시, 경기도, 전라남도), "
+                "parent(소속 시·군·구. 시·도 자체를 물었으면 빈 문자열)입니다. "
+                '예: {"korean": "강남구", "english": "Gangnam-gu", '
+                '"province": "서울특별시", "parent": ""} '
+                "질문에 지역이 없거나 어느 지역인지 알 수 없으면 추측하지 말고 "
+                '{"korean": "", "english": "", "province": "", "parent": ""} 로 답하세요.'},
             {"role": "user", "content": question},
         ],
     )
     text = res.output_text.strip().replace("```json", "").replace("```", "")
     try:
-        return json.loads(text)["location"]
+        result = json.loads(text)
+        if not result.get("korean"):
+            return empty
+        return result
     except Exception:
-        return "서울"
+        return empty
 
 
 # ---------------------------------------------------------
@@ -139,12 +149,34 @@ def extract_location(question):
 # ---------------------------------------------------------
 def geocode(location):
     url = "https://geocoding-api.open-meteo.com/v1/search"
-    params = {"name": location, "count": 1, "language": "ko"}
-    data = requests.get(url, params=params, timeout=10).json()
-    if not data.get("results"):
-        return None
-    r = data["results"][0]
-    return {"name": r["name"], "lat": r["latitude"], "lon": r["longitude"]}
+    province = location.get("province", "")
+
+    # 한글 → 영문 → 상위 지역 순서로 검색 시도
+    candidates = [location.get("korean"), location.get("english"), location.get("parent")]
+
+    for name in candidates:
+        if not name:
+            continue
+        params = {"name": name, "count": 10, "language": "ko", "countryCode": "KR"}
+        data = requests.get(url, params=params, timeout=10).json()
+        results = data.get("results")
+        if not results:
+            continue
+
+        # 시·도가 일치하는 후보를 우선 선택 (동명 지역 문제 방지)
+        picked = results[0]
+        for r in results:
+            if province and r.get("admin1") == province:
+                picked = r
+                break
+
+        place = picked["name"]
+        admin1 = picked.get("admin1", "")
+        if admin1 and admin1 not in place:
+            place = admin1 + " " + place
+        return {"name": place, "lat": picked["latitude"], "lon": picked["longitude"]}
+
+    return None
 
 
 # ---------------------------------------------------------
@@ -273,15 +305,21 @@ if audio is not None:
 
         with st.spinner("날씨를 확인하고 있어요..."):
             location = extract_location(question)
-            geo = geocode(location)
 
-            if geo is None:
-                answer = "죄송해요, " + location + " 지역을 찾지 못했어요. 지역 이름을 다시 말씀해 주세요."
+            if not location["korean"]:
+                # 질문에서 지역을 알아듣지 못한 경우
+                answer = "지역을 알아듣지 못했어요. 어느 지역의 날씨가 궁금한지 다시 말씀해 주세요."
             else:
-                weather = get_weather(geo["lat"], geo["lon"])
-                air = get_air_quality(geo["lat"], geo["lon"])
-                summary = build_weather_summary(geo["name"], weather, air)
-                answer = make_answer(question, summary)
+                geo = geocode(location)
+                if geo is None:
+                    # 지역명은 알아들었지만 검색에서 찾지 못한 경우
+                    answer = location["korean"] + " 지역은 찾지 못했어요. 지역 이름을 다시 말씀해 주세요."
+                else:
+                    weather = get_weather(geo["lat"], geo["lon"])
+                    air = get_air_quality(geo["lat"], geo["lon"])
+                    summary = build_weather_summary(geo["name"], weather, air)
+                    answer = make_answer(question, summary)
+
 
         with st.spinner("답변을 음성으로 만들고 있어요..."):
             mp3 = text_to_speech(answer)
