@@ -6,6 +6,51 @@ import streamlit as st
 from openai import OpenAI
 
 # ---------------------------------------------------------
+# 1) 음성 → 텍스트 (STT)
+# ---------------------------------------------------------
+def speech_to_text(audio_file):
+    transcript = client.audio.transcriptions.create(
+        model="whisper-1",
+        file=("question.wav", audio_file.getvalue()),
+        language="ko",
+    )
+    return transcript.text
+
+
+# ---------------------------------------------------------
+# 5) 답변 생성 (LLM)
+# ---------------------------------------------------------
+def make_answer(question, weather_summary):
+    prompt = f"""
+[김 대리의 질문]
+{question}
+
+[조회된 날씨 데이터]
+{weather_summary}
+"""
+    res = client.responses.create(
+        model="gpt-4o-mini",
+        input=[
+            {"role": "system", "content": sys_role},
+            {"role": "user", "content": prompt},
+        ],
+    )
+    return res.output_text
+
+
+# ---------------------------------------------------------
+# 6) 텍스트 → 음성 (TTS)
+# ---------------------------------------------------------
+def text_to_speech(text):
+    speech = client.audio.speech.create(
+        model="gpt-4o-mini-tts",
+        voice="nova",
+        input=text,
+        instructions="친절하고 또렷한 비서의 톤으로 읽어주세요",
+    )
+    return speech.content  # mp3 bytes
+
+# ---------------------------------------------------------
 # Streamlit 화면
 # ---------------------------------------------------------
 st.title("🌤️ 에이블 날씨 비서")
