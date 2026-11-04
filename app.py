@@ -1,611 +1,275 @@
 
-import os
-import io
-from datetime import date, time, datetime
-
+import json
+import requests
 import streamlit as st
 from openai import OpenAI
 
-# ==========================================
-# 1. 페이지 설정
-# ==========================================
-st.set_page_config(
-    page_title="JARVIS | Personal AI Assistant",
-    page_icon="🤖",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# ---------------------------------------------------------
+# 기본 설정
+# ---------------------------------------------------------
+st.set_page_config(page_title="에이블 날씨 비서", page_icon="🌤️")
 
-st.markdown("""
-<style>
-.block-container {
-    max-width: 1050px;
-    padding-top: 2rem;
-}
-.hero {
-    text-align: center;
-    padding: 30px 10px 20px;
-}
-.hero-icon {
-    font-size: 65px;
-    margin-bottom: 12px;
-}
-.hero-title {
-    font-size: 29px;
-    font-weight: 750;
-}
-.hero-subtitle {
-    color: #9299a5;
-    margin-top: 8px;
-}
-.feature-box {
-    border: 1px solid rgba(140,150,160,0.25);
-    border-radius: 15px;
-    padding: 20px;
-    margin-bottom: 12px;
-}
-</style>
-""", unsafe_allow_html=True)
+# API 키: .streamlit/secrets.toml 에 OPENAI_API_KEY = "sk-..." 로 저장
+client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
-# ==========================================
-# 2. 상태 관리
-# ==========================================
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+# 역할 부여
+sys_role = """
+당신은 '김 대리'의 개인 비서 '에이블'입니다.
+김 대리가 음성으로 물어본 지역의 날씨와 미세먼지 정보를 바탕으로
+오늘 하루를 준비할 수 있도록 친절하고 간결하게 안내합니다.
 
-if "schedules" not in st.session_state:
-    st.session_state.schedules = []
+답변은 다음 순서로 작성하세요.
+1. 해당 지역의 날씨 요약 (기온, 체감온도, 강수 여부)
+2. 미세먼지 상태 (PM10, PM2.5 수치와 등급)
+3. 추천 의상
+   - 반드시 [기온별 옷차림 가이드]에 있는 옷 중에서 추천하세요.
+   - 현재 체감온도 기준 옷차림을 중심으로 안내하고,
+     일교차가 크면 아침/저녁에 걸칠 겉옷도 함께 안내하세요.
+   - 가이드에 팁이 있으면 꼭 함께 전달하세요.
+4. 챙겨야 할 준비물 (비/눈 → 우산, 미세먼지 나쁨 이상 → 마스크,
+   자외선이 강하거나 맑고 더운 날 → 선글라스·선크림, 일교차가 큰 날 → 겉옷 등)
 
-if "last_search" not in st.session_state:
-    st.session_state.last_search = ""
+주어진 데이터에 없는 수치는 지어내지 마세요.
+음성으로 읽을 내용이므로 이모지, 특수기호, 마크다운 표기는 쓰지 말고 자연스러운 문장으로 작성하세요.
 
-if "last_stock" not in st.session_state:
-    st.session_state.last_stock = ""
-
-
-# ==========================================
-# 3. OpenAI 클라이언트
-# ==========================================
-def get_client():
-    api_key = os.environ.get("OPENAI_API_KEY")
-
-    if not api_key:
-        return None
-
-    return OpenAI(api_key=api_key)
-
-
-SYSTEM_ROLE = """
-당신은 JARVIS라는 개인 AI 음성 비서입니다.
-
-역할:
-1. 사용자의 질문에 친절하게 답변합니다.
-2. 한국어로 자연스럽게 대답합니다.
-3. 음성으로 듣기 편하도록 간결하게 설명합니다.
-4. 확실하지 않은 내용은 추측하지 않습니다.
-5. 실시간 검색이나 캘린더에 접근할 수 없다면
-   실제로 조회하거나 등록했다고 주장하지 않습니다.
 """
 
+# ---------------------------------------------------------
+# 날씨 코드 → 한글 설명 (WMO 코드)
+# ---------------------------------------------------------
+WEATHER_CODE = {
+    0: "맑음", 1: "대체로 맑음", 2: "구름 조금", 3: "흐림",
+    45: "안개", 48: "짙은 안개",
+    51: "약한 이슬비", 53: "이슬비", 55: "강한 이슬비",
+    61: "약한 비", 63: "비", 65: "강한 비",
+    71: "약한 눈", 73: "눈", 75: "강한 눈",
+    80: "약한 소나기", 81: "소나기", 82: "강한 소나기",
+    95: "뇌우", 96: "우박을 동반한 뇌우", 99: "강한 우박을 동반한 뇌우",
+}
 
-# ==========================================
-# 4. AI 기능
-# ==========================================
-def speech_to_text(client, audio_bytes):
-    audio_file = io.BytesIO(audio_bytes)
-    audio_file.name = "recording.wav"
 
+# ---------------------------------------------------------
+# 기온별 옷차림 가이드 (첨부 이미지 기준)
+# (최저 기온 기준, 옷 목록, 추가 팁) - 높은 온도 구간부터 순서대로
+# ---------------------------------------------------------
+CLOTHING_GUIDE = [
+    (28, "민소매, 반팔, 반바지, 치마", ""),
+    (23, "반팔, 얇은 셔츠, 반바지, 면바지", ""),
+    (20, "얇은 가디건, 긴팔티, 면바지, 청바지", ""),
+    (17, "얇은 니트, 가디건, 맨투맨, 얇은 자켓, 면바지, 청바지", ""),
+    (12, "자켓, 가디건, 야상, 맨투맨, 니트, 스타킹, 청바지, 면바지", ""),
+    (9,  "자켓, 트렌치코트, 야상, 니트, 스타킹, 청바지, 면바지", "아우터 안에 가디건을 꼭 입으세요"),
+    (5,  "코트, 히트텍, 니트, 청바지, 레깅스", "레이어드(겹쳐 입기)가 필수예요"),
+    (-100, "패딩, 두꺼운 코트, 목도리, 기모 제품", "최대한 많이 껴입으세요"),
+]
+
+
+def get_clothing(temp):
+    """기온(℃)에 맞는 옷차림과 팁을 반환"""
+    for min_temp, clothes, tip in CLOTHING_GUIDE:
+        if temp >= min_temp:
+            return clothes, tip
+
+
+# ---------------------------------------------------------
+# 미세먼지 등급 (한국 환경부 기준)
+# ---------------------------------------------------------
+def grade_pm10(v):
+    if v <= 30: return "좋음"
+    if v <= 80: return "보통"
+    if v <= 150: return "나쁨"
+    return "매우 나쁨"
+
+
+def grade_pm25(v):
+    if v <= 15: return "좋음"
+    if v <= 35: return "보통"
+    if v <= 75: return "나쁨"
+    return "매우 나쁨"
+
+
+# ---------------------------------------------------------
+# 1) 음성 → 텍스트 (STT)
+# ---------------------------------------------------------
+def speech_to_text(audio_file):
     transcript = client.audio.transcriptions.create(
         model="whisper-1",
-        file=audio_file
+        file=("question.wav", audio_file.getvalue()),
+        language="ko",
     )
-
     return transcript.text
 
 
-def ask_ai(client, question, reference_text=""):
-    system_content = SYSTEM_ROLE
-
-    if reference_text:
-        system_content += (
-            "\n\n참고 문서 내용:\n"
-            + reference_text[:20000]
-        )
-
-    # 최근 대화 내용을 함께 전달
-    history = []
-
-    for msg in st.session_state.messages[-10:]:
-        history.append({
-            "role": msg["role"],
-            "content": msg["content"]
-        })
-
-    response = client.responses.create(
+# ---------------------------------------------------------
+# 2) 질문에서 지역명 추출 (LLM)
+# ---------------------------------------------------------
+def extract_location(question):
+    res = client.responses.create(
         model="gpt-4o-mini",
         input=[
-            {"role": "system", "content": system_content},
-            *history,
-            {"role": "user", "content": question}
-        ]
+            {"role": "system", "content":
+                "사용자 질문에서 날씨를 묻는 지역명만 추출해 "
+                'JSON으로만 답하세요. 예: {"location": "서울"} '
+                '지역이 없으면 {"location": "서울"} 로 답하세요.'},
+            {"role": "user", "content": question},
+        ],
     )
-
-    return response.output_text
-
-
-def text_to_speech(client, answer, voice):
-    speech_response = client.audio.speech.create(
-        model="tts-1",
-        voice=voice,
-        input=answer
-    )
-
-    return speech_response.read()
-
-
-def process_question(question, reference_text=""):
-    if not question.strip():
-        st.warning("질문을 입력하거나 녹음해주세요.")
-        return
-
-    client = get_client()
-
-    if client is None:
-        st.error("OPENAI_API_KEY가 설정되지 않았습니다.")
-        return
-
+    text = res.output_text.strip().replace("```json", "").replace("```", "")
     try:
-        with st.spinner("AI가 답변을 생성하고 있습니다..."):
-            answer = ask_ai(client, question, reference_text)
-
-            audio_data = None
-
-            if st.session_state.voice_enabled:
-                audio_data = text_to_speech(
-                    client,
-                    answer,
-                    st.session_state.voice
-                )
-
-        st.session_state.messages.append({
-            "role": "user",
-            "content": question
-        })
-
-        st.session_state.messages.append({
-            "role": "assistant",
-            "content": answer,
-            "audio": audio_data
-        })
-
-    except Exception as e:
-        st.error(f"AI 처리 중 오류: {e}")
+        return json.loads(text)["location"]
+    except Exception:
+        return "서울"
 
 
-# ==========================================
-# 5. 사이드바
-# ==========================================
-with st.sidebar:
-    st.title("🤖 JARVIS AI")
-    st.caption("Personal AI Voice Assistant")
-    st.divider()
+# ---------------------------------------------------------
+# 3) 지역명 → 위도/경도 (지오코딩)
+# ---------------------------------------------------------
+def geocode(location):
+    url = "https://geocoding-api.open-meteo.com/v1/search"
+    params = {"name": location, "count": 1, "language": "ko"}
+    data = requests.get(url, params=params, timeout=10).json()
+    if not data.get("results"):
+        return None
+    r = data["results"][0]
+    return {"name": r["name"], "lat": r["latitude"], "lon": r["longitude"]}
 
-    menu = st.radio(
-        "메뉴",
-        [
-            "🎙️ 음성 비서",
-            "📅 일정 관리",
-            "🔎 AI 검색",
-            "📈 주식 분석",
-            "⚙️ 설정"
-        ]
+
+# ---------------------------------------------------------
+# 4) 날씨 + 미세먼지 조회
+# ---------------------------------------------------------
+def get_weather(lat, lon):
+    url = "https://api.open-meteo.com/v1/forecast"
+    params = {
+        "latitude": lat, "longitude": lon,
+        "current": "temperature_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m",
+        "daily": "temperature_2m_max,temperature_2m_min,precipitation_probability_max,uv_index_max",
+        "timezone": "auto",
+        "forecast_days": 1,
+    }
+    return requests.get(url, params=params, timeout=10).json()
+
+
+def get_air_quality(lat, lon):
+    url = "https://air-quality-api.open-meteo.com/v1/air-quality"
+    params = {
+        "latitude": lat, "longitude": lon,
+        "current": "pm10,pm2_5",
+        "timezone": "auto",
+    }
+    return requests.get(url, params=params, timeout=10).json()
+
+
+def build_weather_summary(place, weather, air):
+    cur, daily = weather["current"], weather["daily"]
+    pm10, pm25 = air["current"]["pm10"], air["current"]["pm2_5"]
+
+    feels = cur["apparent_temperature"]
+    t_min = daily["temperature_2m_min"][0]
+    t_max = daily["temperature_2m_max"][0]
+    diff = round(t_max - t_min, 1)
+
+    # 기온대별 옷차림 (체감 / 아침·저녁 / 낮)
+    now_clothes, now_tip = get_clothing(feels)
+    morning_clothes, morning_tip = get_clothing(t_min)
+    day_clothes, _ = get_clothing(t_max)
+
+    diff_note = ""
+    if diff >= 10:
+        diff_note = f"일교차가 {diff}도로 큽니다. 벗고 입기 편한 겉옷을 챙기세요."
+
+    return f"""
+[지역] {place}
+[현재 날씨] {WEATHER_CODE.get(cur['weather_code'], '알 수 없음')}
+[현재 기온] {cur['temperature_2m']}도 (체감 {feels}도)
+[오늘 최저/최고 기온] {t_min}도 / {t_max}도 (일교차 {diff}도)
+[강수 확률] {daily['precipitation_probability_max'][0]}%
+[현재 강수량] {cur['precipitation']}mm
+[풍속] {cur['wind_speed_10m']}km/h
+[자외선 지수 최대] {daily['uv_index_max'][0]}
+[미세먼지 PM10] {pm10}㎍/㎥ ({grade_pm10(pm10)})
+[초미세먼지 PM2.5] {pm25}㎍/㎥ ({grade_pm25(pm25)})
+
+[기온별 옷차림 가이드]
+- 현재 체감온도({feels}도) 기준: {now_clothes} {('(' + now_tip + ')') if now_tip else ''}
+- 아침/저녁 최저기온({t_min}도) 기준: {morning_clothes} {('(' + morning_tip + ')') if morning_tip else ''}
+- 낮 최고기온({t_max}도) 기준: {day_clothes}
+- 일교차 안내: {diff_note if diff_note else '일교차가 크지 않습니다.'}
+"""
+"""
+
+
+# ---------------------------------------------------------
+# 5) 답변 생성 (LLM)
+# ---------------------------------------------------------
+def make_answer(question, weather_summary):
+    prompt = f"""
+[김 대리의 질문]
+{question}
+
+[조회된 날씨 데이터]
+{weather_summary}
+"""
+    res = client.responses.create(
+        model="gpt-4o-mini",
+        input=[{"role": "system", "content": sys_role},
+               {"role": "user", "content": prompt}],
     )
+    return res.output_text
 
-    st.divider()
 
-    st.session_state.voice_enabled = st.toggle(
-        "AI 음성 답변",
-        value=st.session_state.get("voice_enabled", True)
+# ---------------------------------------------------------
+# 6) 텍스트 → 음성 (TTS)
+# ---------------------------------------------------------
+def text_to_speech(text):
+    speech = client.audio.speech.create(
+        model="gpt-4o-mini-tts",
+        voice="nova",
+        input=text,
+        instructions="친절하고 또렷한 비서의 톤으로 읽어주세요",
     )
-
-    st.session_state.show_text = st.toggle(
-        "답변 텍스트 표시",
-        value=st.session_state.get("show_text", False)
-    )
-
-    st.session_state.voice = st.selectbox(
-        "AI 목소리",
-        ["alloy", "nova", "echo", "shimmer", "onyx", "fable"],
-        index=["alloy", "nova", "echo", "shimmer", "onyx", "fable"].index(
-            st.session_state.get("voice", "nova")
-        )
-    )
-
-    st.divider()
-
-    if get_client():
-        st.success("OpenAI API 키 설정됨")
-    else:
-        st.warning("OpenAI API 키 미설정")
-
-    st.caption("JARVIS v1.0 | Streamlit")
+    return speech.content  # mp3 bytes
 
 
-# ==========================================
-# 6. 음성 비서
-# ==========================================
-if menu == "🎙️ 음성 비서":
+# ---------------------------------------------------------
+# Streamlit 화면
+# ---------------------------------------------------------
+st.title("🌤️ 에이블 날씨 비서")
+st.caption("마이크 버튼을 누르고 '오늘 서울의 날씨는 어때?'처럼 물어보세요.")
 
-    st.markdown("""
-    <div class="hero">
-        <div class="hero-icon">🤖</div>
-        <div class="hero-title">
-            안녕하세요, JARVIS입니다.
-        </div>
-        <div class="hero-subtitle">
-            무엇을 도와드릴까요?<br>
-            마이크로 질문하거나 직접 입력하세요.
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+audio = st.audio_input("질문 녹음하기")
 
-    st.divider()
+if audio is not None:
+    # 같은 녹음을 중복 처리하지 않도록 확인
+    audio_bytes = audio.getvalue()
+    if st.session_state.get("last_audio") != audio_bytes:
+        st.session_state["last_audio"] = audio_bytes
 
-    left, right = st.columns([2, 1])
+        with st.spinner("질문을 듣고 있어요..."):
+            question = speech_to_text(audio)
 
-    with left:
-        st.subheader("🎤 음성 질문")
+        with st.spinner("날씨를 확인하고 있어요..."):
+            location = extract_location(question)
+            geo = geocode(location)
 
-        audio_value = st.audio_input(
-            "마이크를 눌러 말씀해주세요."
-        )
-
-        if st.button(
-            "🎙️ 음성 질문 실행",
-            type="primary",
-            use_container_width=True
-        ):
-            if audio_value is None:
-                st.warning("먼저 음성을 녹음해주세요.")
+            if geo is None:
+                answer = f"죄송해요, '{location}' 지역을 찾지 못했어요. 지역 이름을 다시 말씀해 주세요."
             else:
-                client = get_client()
-
-                if client is None:
-                    st.error("OpenAI API 키가 필요합니다.")
-                else:
-                    try:
-                        with st.spinner("음성을 인식하고 있습니다..."):
-                            question = speech_to_text(
-                                client,
-                                audio_value.getvalue()
-                            )
-
-                        process_question(question)
-
-                    except Exception as e:
-                        st.error(f"음성 인식 오류: {e}")
-
-    with right:
-        st.subheader("📎 참고 자료")
-
-        uploaded_file = st.file_uploader(
-            "TXT 파일 업로드",
-            type=["txt"]
-        )
-
-        reference_text = ""
-
-        if uploaded_file is not None:
-            reference_text = uploaded_file.getvalue().decode(
-                "utf-8-sig",
-                errors="replace"
-            )
-            st.success("참고 문서 준비 완료")
-
-    st.divider()
-
-    st.subheader("💬 텍스트 질문")
-
-    question = st.chat_input(
-        "JARVIS에게 질문을 입력하세요..."
-    )
-
-    if question:
-        process_question(question, reference_text)
-
-    st.divider()
-
-    st.subheader("🔊 대화 기록")
-
-    if not st.session_state.messages:
-        st.info("아직 대화 기록이 없습니다.")
-
-    for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]):
-
-            if msg["role"] == "user":
-                st.write(msg["content"])
-
-            else:
-                # 음성 우선 출력
-                if msg.get("audio"):
-                    st.audio(
-                        msg["audio"],
-                        format="audio/mp3",
-                        autoplay=False
-                    )
-
-                # 텍스트는 옵션으로 표시
-                if (
-                    st.session_state.show_text
-                    or not msg.get("audio")
-                ):
-                    st.write(msg["content"])
-
-    if st.session_state.messages:
-        if st.button("🗑️ 대화 초기화"):
-            st.session_state.messages = []
-            st.rerun()
-
-
-# ==========================================
-# 7. 일정 관리
-# ==========================================
-elif menu == "📅 일정 관리":
-
-    st.title("📅 일정 관리")
-    st.caption(
-        "음성 일정 관리 기능을 위한 화면"
-    )
-
-    st.info(
-        "현재는 화면 내 임시 일정 저장만 가능합니다. "
-        "Google Calendar에는 등록되지 않습니다."
-    )
-
-    left, right = st.columns([1, 1])
-
-    with left:
-        st.subheader("➕ 일정 추가")
-
-        with st.form("schedule_form"):
-            schedule_title = st.text_input(
-                "일정 제목",
-                placeholder="예: 프로젝트 회의"
-            )
-
-            schedule_date = st.date_input(
-                "날짜",
-                value=date.today()
-            )
-
-            schedule_time = st.time_input(
-                "시간",
-                value=time(10, 0)
-            )
-
-            description = st.text_area(
-                "상세 내용"
-            )
-
-            submitted = st.form_submit_button(
-                "일정 추가",
-                use_container_width=True
-            )
-
-        if submitted:
-            if not schedule_title.strip():
-                st.warning("일정 제목을 입력해주세요.")
-            else:
-                st.session_state.schedules.append({
-                    "title": schedule_title,
-                    "date": schedule_date,
-                    "time": schedule_time,
-                    "description": description
-                })
-
-                st.success("임시 일정이 추가되었습니다.")
-
-    with right:
-        st.subheader("📋 나의 일정")
-
-        selected_date = st.date_input(
-            "조회할 날짜",
-            value=date.today(),
-            key="lookup_date"
-        )
-
-        day_schedules = [
-            item
-            for item in st.session_state.schedules
-            if item["date"] == selected_date
-        ]
-
-        day_schedules.sort(key=lambda x: x["time"])
-
-        if not day_schedules:
-            st.info("선택한 날짜에 등록된 임시 일정이 없습니다.")
-
-        for item in day_schedules:
-            with st.container(border=True):
-                st.markdown(f"**{item['title']}**")
-                st.write(
-                    item["time"].strftime("%H:%M")
-                )
-                if item["description"]:
-                    st.caption(item["description"])
-
-    st.divider()
-    st.subheader("🎙️ 음성 일정 등록")
-    st.caption(
-        "향후 '내일 오후 3시에 회의 등록해줘'와 같은 "
-        "자연어 일정 등록 기능을 연결할 영역입니다."
-    )
-
-
-# ==========================================
-# 8. AI 검색
-# ==========================================
-elif menu == "🔎 AI 검색":
-
-    st.title("🔎 AI 웹 검색")
-    st.caption("최신 정보를 검색하는 AI 비서")
-
-    st.markdown("""
-    <div class="feature-box">
-        <h3>🌐 무엇이 궁금하신가요?</h3>
-        인터넷의 최신 정보를 검색하고
-        음성으로 설명하는 기능을 연결할 예정입니다.
-    </div>
-    """, unsafe_allow_html=True)
-
-    with st.form("search_form"):
-        search_query = st.text_input(
-            "검색할 내용",
-            placeholder="예: 오늘 AI 관련 주요 뉴스"
-        )
-
-        search_submit = st.form_submit_button(
-            "🔍 검색",
-            use_container_width=True
-        )
-
-    if search_submit:
-        if search_query.strip():
-            st.session_state.last_search = search_query
-        else:
-            st.warning("검색어를 입력해주세요.")
-
-    if st.session_state.last_search:
-        st.subheader("검색 요청")
-        st.write(st.session_state.last_search)
-
-        st.info(
-            "아직 웹 검색 API가 연결되지 않았습니다. "
-            "현재는 검색 요청 화면만 구현되어 있습니다."
-        )
-
-    st.subheader("추천 검색 주제")
-
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        st.info("📰 주요 뉴스")
-
-    with col2:
-        st.info("🌤️ 날씨 정보")
-
-    with col3:
-        st.info("💻 최신 IT 기술")
-
-
-# ==========================================
-# 9. 주식 분석
-# ==========================================
-elif menu == "📈 주식 분석":
-
-    st.title("📈 AI 주식 분석")
-    st.caption(
-        "국내 및 해외 주식 종목 검색과 분석"
-    )
-
-    with st.form("stock_form"):
-        stock_name = st.text_input(
-            "종목명 또는 종목 코드",
-            placeholder="삼성전자 / AAPL / NVIDIA"
-        )
-
-        submitted = st.form_submit_button(
-            "📊 종목 조회",
-            use_container_width=True
-        )
-
-    if submitted:
-        if stock_name.strip():
-            st.session_state.last_stock = stock_name
-        else:
-            st.warning("종목명을 입력해주세요.")
-
-    if st.session_state.last_stock:
-        st.subheader(
-            f"📌 {st.session_state.last_stock}"
-        )
-
-        st.info(
-            "종목 코드 자동 식별 및 실시간 시세 API는 "
-            "아직 연결되지 않았습니다."
-        )
-
-    st.divider()
-
-    st.subheader("시장 정보")
-
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        st.metric("현재 주가", "연동 전")
-
-    with col2:
-        st.metric("전일 대비", "연동 전")
-
-    with col3:
-        st.metric("거래량", "연동 전")
-
-    st.subheader("📉 주가 차트")
-    st.info("실제 주가 데이터를 연결하면 차트가 표시됩니다.")
-
-    st.subheader("🤖 AI 종목 분석")
-    st.caption(
-        "향후 종목 코드 식별, 시세 조회, "
-        "뉴스 분석 및 음성 브리핑을 연결할 영역입니다."
-    )
-
-
-# ==========================================
-# 10. 설정
-# ==========================================
-elif menu == "⚙️ 설정":
-
-    st.title("⚙️ AI 비서 설정")
-
-    st.subheader("🎙️ 음성 설정")
-    st.write(
-        "음성 답변 활성화 여부와 AI 목소리는 "
-        "왼쪽 사이드바에서 변경할 수 있습니다."
-    )
-
-    st.divider()
-
-    st.subheader("🤖 AI 모델")
-
-    st.text_input(
-        "대화 모델",
-        value="gpt-4o-mini",
-        disabled=True
-    )
-
-    st.text_input(
-        "음성 인식 모델",
-        value="whisper-1",
-        disabled=True
-    )
-
-    st.text_input(
-        "음성 합성 모델",
-        value="tts-1",
-        disabled=True
-    )
-
-    st.divider()
-
-    st.subheader("🔐 연결 상태")
-
-    if get_client():
-        st.success("OpenAI API 키 설정됨")
-    else:
-        st.error("OpenAI API 키가 없습니다.")
-
-    st.warning(
-        "Google Calendar, 실시간 웹 검색 및 "
-        "주식 시세 서비스는 미연결 상태입니다."
-    )
+                weather = get_weather(geo["lat"], geo["lon"])
+                air = get_air_quality(geo["lat"], geo["lon"])
+                summary = build_weather_summary(geo["name"], weather, air)
+                answer = make_answer(question, summary)
+
+        with st.spinner("답변을 음성으로 만들고 있어요..."):
+            mp3 = text_to_speech(answer)
+
+        st.session_state["result"] = {
+            "question": question, "answer": answer, "mp3": mp3,
+        }
+
+# 결과 출력 (텍스트 + 음성 동시)
+if "result" in st.session_state:
+    r = st.session_state["result"]
+    st.markdown(f"**🎤 질문:** {r['question']}")
+    st.markdown("---")
+    st.markdown(r["answer"])
+    st.audio(r["mp3"], format="audio/mp3", autoplay=True)
