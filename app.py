@@ -418,6 +418,8 @@ header[data-testid="stHeader"] { background: transparent; }
 .tu-placeholder { color: #bdb9d2; font-size: 1.9rem; font-weight: 500; padding-top: 6px; }
 .tu-label { color: #8a86a3; font-size: 0.85rem; font-weight: 500; margin-bottom: 8px; }
 .tu-question { color: #1f2033; font-size: 1.55rem; font-weight: 700; line-height: 1.5; }
+.tu-wait { color: #bdb9d2; font-size: 1.05rem; font-weight: 500; animation: tu-blink 1.6s ease-in-out infinite; }
+@keyframes tu-blink { 0%, 100% { opacity: 0.45; } 50% { opacity: 1; } }
 .tu-divider { height: 1px; background: #efebfa; margin: 22px 0 18px 0; }
 .tu-answer { color: #34344a; font-size: 1.12rem; line-height: 1.85; }
 .st-key-recwrap { position: relative; margin: 22px 0 6px 0; }
@@ -459,6 +461,7 @@ header[data-testid="stHeader"] { background: transparent; }
 .st-key-settings_panel { background: #ffffff; border: 1px solid #ece8f7; border-radius: 28px; box-shadow: 0 12px 40px rgba(139, 108, 240, 0.10); padding: 22px 24px; }
 .tu-panel-title { color: #1f2033; font-size: 1.25rem; font-weight: 800; padding-bottom: 12px; border-bottom: 1px solid #efebfa; margin-bottom: 16px; }
 .tu-panel-sec { color: #1f2033; font-size: 0.98rem; font-weight: 700; margin: 18px 0 6px 0; }
+.tu-ver { color: #b5b1c9; font-size: 0.72rem; margin-top: 28px; }
 [data-testid="stAudio"] audio { width: 100%; border-radius: 999px; background: #f5f1ff; }
 [data-testid="stSidebar"] { background: #ffffff; border-right: 1px solid #ece8f7; }
 .tu-brand { color: #1f2033; font-size: 1.25rem; font-weight: 800; margin-top: 6px; }
@@ -518,6 +521,26 @@ WAVE_HTML = (
     + '<span class="tu-stop">' + STOP_SVG + '</span></div>'
     + build_bars("right") + '</div>'
 )
+
+
+def build_card_html(question=None, answer=None, mode="음성 + 텍스트", listening=False):
+    """결과 카드 HTML. 질문/답변이 아직 없으면 대기 문구를 보여줌"""
+    if question is None and not listening:
+        return '<div class="tu-card"><div class="tu-placeholder">행복한 하루 되세요!</div></div>'
+
+    card = '<div class="tu-card"><div class="tu-label">🎤 내 말 · 음성 인식 결과</div>'
+    if question is None:
+        card += '<div class="tu-wait">질문을 듣고 있어요...</div>'
+    else:
+        card += '<div class="tu-question">' + html.escape(question) + '</div>'
+        if mode != "음성만":
+            card += '<div class="tu-divider"></div><div class="tu-label">Thumbs Up의 답변</div>'
+            if answer is None:
+                card += '<div class="tu-wait">답변을 준비하고 있어요...</div>'
+            else:
+                card += '<div class="tu-answer">' + html.escape(answer).replace("\n", "<br>") + '</div>'
+    card += '</div>'
+    return card
 
 
 def show_status(placeholder, kind, text):
@@ -666,17 +689,26 @@ else:
 # ---------------------------------------------------------
 # 질문 처리
 # ---------------------------------------------------------
+mode = st.session_state["pref_mode"]
+
 if audio is not None:
     st.session_state.pop("result", None)
     st.session_state.pop("error", None)
     error_ph.empty()
     error_message = None
+    question = None
+
+    # 처리 시작 즉시 카드 유지 (질문 인식 전에는 '듣고 있어요' 표시)
+    card_ph.markdown(build_card_html(listening=True), unsafe_allow_html=True)
 
     try:
         start = time.time()
 
-        show_status(status_ph, "busy", "🎧 질문을 듣고 있어요...")
+        show_status(status_ph, "busy", "⏳ 잠시만 기다려 주세요...")
         question = speech_to_text(audio)
+
+        # 질문이 인식되면 바로 카드에 텍스트로 표시
+        card_ph.markdown(build_card_html(question=question, mode=mode), unsafe_allow_html=True)
 
         show_status(status_ph, "busy", "🌍 지역과 날씨를 확인하고 있어요...")
         location = extract_location(question)
@@ -724,6 +756,15 @@ if audio is not None:
 
     if error_message:
         st.session_state["error"] = error_message
+        if question:
+            # 질문은 인식됐지만 이후 단계에서 실패한 경우, 질문은 카드에 남김
+            st.session_state["result"] = {
+                "question": question,
+                "answer": "답변을 만들지 못했어요. 다시 한 번 말씀해 주세요.",
+                "mp3": None,
+                "played": True,
+                "elapsed": "0",
+            }
 
     # 녹음창을 새것으로 바꿔서, 큰 버튼이 다시 '녹음 대기' 상태가 되게 함
     st.session_state["audio_n"] += 1
@@ -733,31 +774,25 @@ if audio is not None:
 # 결과 카드 출력 (텍스트 + 음성 동시)
 # ---------------------------------------------------------
 result = st.session_state.get("result")
-mode = st.session_state["pref_mode"]
 
 with card_ph.container():
     if result is None:
+        st.markdown(build_card_html(), unsafe_allow_html=True)
+    else:
         st.markdown(
-            '<div class="tu-card"><div class="tu-placeholder">행복한 하루 되세요!</div></div>',
+            build_card_html(question=result["question"], answer=result["answer"], mode=mode),
             unsafe_allow_html=True,
         )
-    else:
-        card_html = (
-            '<div class="tu-card">'
-            '<div class="tu-label">🎤 내 말 · 음성 인식 결과</div>'
-            '<div class="tu-question">' + html.escape(result["question"]) + '</div>'
-        )
-        if mode != "음성만":
-            answer_html = html.escape(result["answer"]).replace("\n", "<br>")
-            card_html += (
-                '<div class="tu-divider"></div>'
-                '<div class="tu-label">Thumbs Up의 답변</div>'
-                '<div class="tu-answer">' + answer_html + '</div>'
-            )
-        card_html += '</div>'
-        st.markdown(card_html, unsafe_allow_html=True)
 
         if mode != "텍스트만" and result["mp3"]:
             # 새 답변일 때만 자동 재생 (설정을 열고 닫을 때 다시 재생되지 않도록)
             st.audio(result["mp3"], format="audio/mp3", autoplay=not result["played"])
             result["played"] = True
+
+# ---------------------------------------------------------
+# 버전 표시 (새 코드가 배포됐는지 확인용)
+# ---------------------------------------------------------
+st.markdown(
+    '<div class="tu-ver">버전 v6 · Streamlit ' + st.__version__ + '</div>',
+    unsafe_allow_html=True,
+)
