@@ -462,7 +462,8 @@ header[data-testid="stHeader"] { background: transparent; }
 .st-key-toggle_sidebar button { min-height: 42px; width: 100%; border-radius: 999px; border: 1px solid #e3dcf7; background: #ffffff; color: #6b52d9; font-weight: 600; padding: 0.55rem 0.6rem; box-shadow: 0 4px 14px rgba(139, 108, 240, 0.08); }
 .st-key-toggle_sidebar button:hover { border-color: #b9a6f5; background: #f5f1ff; color: #5b45c4; }
 
-.st-key-settings_panel { background: #ffffff; border: 1px solid #ece8f7; border-radius: 28px; box-shadow: 0 12px 40px rgba(139, 108, 240, 0.10); padding: 22px 24px; }
+.st-key-settings_panel { position: fixed !important; top: 124px; right: 40px; width: min(380px, calc(100vw - 80px)); max-height: calc(100vh - 150px); overflow-y: auto; z-index: 60; background: #ffffff; border: 1px solid #ece8f7; border-radius: 28px; box-shadow: 0 24px 64px rgba(139, 108, 240, 0.28); padding: 22px 24px; }
+
 .tu-panel-title { color: #1f2033; font-size: 1.25rem; font-weight: 800; padding-bottom: 12px; border-bottom: 1px solid #efebfa; margin-bottom: 16px; }
 .tu-panel-sec { color: #1f2033; font-size: 0.98rem; font-weight: 700; margin: 18px 0 6px 0; }
 .tu-ver { color: #b5b1c9; font-size: 0.72rem; margin-top: 28px; }
@@ -658,6 +659,17 @@ with left:
         )
 
 with right:
+    # 비서 이미지는 항상 표시 (설정 패널이 열려도 사라지지 않음)
+    with st.container(key="hero"):
+        if os.path.exists(ASSISTANT_IMG):
+            st.image(ASSISTANT_IMG, width="stretch")
+        else:
+            st.markdown(
+                '<div style="font-size:7rem; text-align:center;">🎙️</div>',
+                unsafe_allow_html=True,
+            )
+
+    # 설정 패널: 본문 위에 얹히는 팝업
     if st.session_state["show_settings"]:
         with st.container(border=False, key="settings_panel"):
             st.markdown('<div class="tu-panel-title">⚙️ 설정 및 도구</div>', unsafe_allow_html=True)
@@ -690,16 +702,6 @@ with right:
                 st.session_state.pop("error", None)
                 st.rerun()
             st.caption("설정은 현재 브라우저 세션에서 유지됩니다.")
-    else:
-        # 화면 오른쪽 아래에 붙여서 크게 표시 (CSS: .st-key-hero)
-        with st.container(key="hero"):
-            if os.path.exists(ASSISTANT_IMG):
-                st.image(ASSISTANT_IMG, width="stretch")
-            else:
-                st.markdown(
-                    '<div style="font-size:7rem; text-align:center;">🎙️</div>',
-                    unsafe_allow_html=True,
-                )
 
 # ---------------------------------------------------------
 # 안내 배너 초기 상태
