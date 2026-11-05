@@ -19,7 +19,7 @@ st.set_page_config(
     page_title="Thumbs Up | AI Voice Assistant",
     page_icon="🎙️",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
 
 # API 키: Streamlit Cloud > Settings > Secrets 에 OPENAI_API_KEY = "sk-..." 로 저장
@@ -479,7 +479,27 @@ header[data-testid="stHeader"] { background: transparent; }
 .st-key-hero img { display: block; width: 100%; height: auto; }
 @media (max-width: 900px) { .st-key-hero { display: none; } }
 """
+
+# ---------------------------------------------------------
+# 사이드 메뉴 열림/닫힘 (설정 버튼 옆 메뉴 버튼으로 여닫기)
+# ---------------------------------------------------------
+st.session_state.setdefault("show_sidebar", False)  # True로 바꾸면 처음부터 열려 있음
+
+# 기본 '<<', '>>' 아이콘은 숨기고, 설정 버튼 옆의 메뉴 버튼만 사용
+CSS += '[data-testid="stExpandSidebarButton"], [data-testid="stSidebarCollapseButton"], [data-testid="stSidebarCollapsedControl"] { display: none; }\n'
+CSS += ".tu-brand { margin: 6px 0 18px 0; }\n"
+CSS += ".tu-badge { white-space: nowrap; flex: none; margin-left: 8px; }\n"
+CSS += ".tu-title { font-size: clamp(1.8rem, 3.8vw, 3.1rem); }\n"
+
+if st.session_state["show_sidebar"]:
+    # 사이드 메뉴가 열리면 본문이 좁아지므로 제목과 비서 이미지를 조금 줄임
+    CSS += ".tu-title { font-size: clamp(1.8rem, 2.7vw, 3.1rem); }\n"
+    CSS += ".st-key-hero { width: min(30vw, 70vh); }\n"
+else:
+    CSS += '[data-testid="stSidebar"] { display: none; }\n'
+
 st.markdown("<style>" + CSS + "</style>", unsafe_allow_html=True)
+
 
 TITLE_HTML = (
     '<div class="tu-title">Thumbs Up,<br>'
@@ -579,7 +599,7 @@ MENU_ITEMS = [
     ("✉️", "이메일 작성 및 발송", False),
 ]
 
-menu_html = '<div class="tu-brand">Thumbs Up<span>나의 질</span></div>'
+menu_html = '<div class="tu-brand">나의 질문</div>'
 for icon, name, enabled in MENU_ITEMS:
     if enabled:
         menu_html += '<div class="tu-menu-item active"><div>' + icon + ' ' + name + '</div></div>'
@@ -604,7 +624,7 @@ with head_menu:
         st.session_state["show_sidebar"] = not st.session_state["show_sidebar"]
         st.rerun()
 with head_right:
-    toggle_label = "설정 닫기 ✕" if st.session_state["show_settings"] else "⚙️ 설정"
+    toggle_label = "닫기 ✕" if st.session_state["show_settings"] else "⚙️ 설정"
     if st.button(toggle_label, key="toggle_settings", width="stretch"):
         st.session_state["show_settings"] = not st.session_state["show_settings"]
         st.rerun()
