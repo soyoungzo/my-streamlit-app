@@ -12,7 +12,7 @@ from openai import OpenAI
 # ---------------------------------------------------------
 st.set_page_config(
     page_title="Thumbs Up | AI Voice Assistant",
-    page_icon="🎙️",
+    page_icon="👍🏻",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
