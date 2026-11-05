@@ -1,18 +1,23 @@
 
+import base64
 import html
 import json
+import math
 import os
 import time
+from io import BytesIO
+
 import requests
 import streamlit as st
 from openai import OpenAI
+from PIL import Image
 
 # ---------------------------------------------------------
 # 기본 설정
 # ---------------------------------------------------------
 st.set_page_config(
     page_title="Thumbs Up | AI Voice Assistant",
-    page_icon="👍🏻",
+    page_icon="🎙️",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
@@ -319,9 +324,25 @@ def build_weather_summary(place, weather, air):
 
 
 # ---------------------------------------------------------
+# 첨부 이미지 준비 (크기를 줄여서 빠르게 전달)
+# ---------------------------------------------------------
+def prepare_image(uploaded_file):
+    """업로드한 jpg/png를 최대 1024px, JPEG로 줄여서 반환. 실패하면 None"""
+    try:
+        img = Image.open(BytesIO(uploaded_file.getvalue()))
+        img = img.convert("RGB")
+        img.thumbnail((1024, 1024))
+        buf = BytesIO()
+        img.save(buf, format="JPEG", quality=85)
+        return {"bytes": buf.getvalue(), "mime": "image/jpeg"}
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------
 # 5) 답변 생성 (LLM)
 # ---------------------------------------------------------
-def make_answer(question, weather_summary, memo=""):
+def make_answer(question, weather_summary, memo="", image=None):
     prompt = f"""
 [김 대리의 질문]
 {question}
@@ -334,11 +355,23 @@ def make_answer(question, weather_summary, memo=""):
         prompt += "\n[첨부 메모]\n" + memo + "\n"
         prompt += "(첨부 메모는 참고용입니다. 오늘 날씨와 관련된 일정이 있을 때만 준비물에 반영하세요.)\n"
 
+    # 첨부한 이미지가 있으면 함께 전달
+    if image is not None:
+        prompt += "\n[첨부 이미지]가 함께 전달되었습니다. 질문이나 오늘 날씨와 관련 있을 때만 참고하세요.\n"
+
+    content = [{"type": "input_text", "text": prompt}]
+    if image is not None:
+        b64 = base64.b64encode(image["bytes"]).decode("utf-8")
+        content.append({
+            "type": "input_image",
+            "image_url": "data:" + image["mime"] + ";base64," + b64,
+        })
+
     res = client.responses.create(
         model="gpt-4o-mini",
         input=[
             {"role": "system", "content": sys_role},
-            {"role": "user", "content": prompt},
+            {"role": "user", "content": content},
         ],
     )
     return res.output_text
@@ -387,20 +420,37 @@ header[data-testid="stHeader"] { background: transparent; }
 .tu-question { color: #1f2033; font-size: 1.55rem; font-weight: 700; line-height: 1.5; }
 .tu-divider { height: 1px; background: #efebfa; margin: 22px 0 18px 0; }
 .tu-answer { color: #34344a; font-size: 1.12rem; line-height: 1.85; }
-.tu-wave { display: flex; align-items: center; gap: 0; margin: 22px 0 14px 0; height: 96px; }
-.tu-line { flex: 1; height: 4px; border-radius: 99px; animation: tu-breathe 3.2s ease-in-out infinite; }
-.tu-line.left { background: linear-gradient(90deg, rgba(168, 200, 255, 0), #a8c8ff); box-shadow: 0 6px 0 -1px rgba(168, 200, 255, 0.35); }
-.tu-line.right { background: linear-gradient(90deg, #f3a8e0, rgba(243, 168, 224, 0)); box-shadow: 0 -6px 0 -1px rgba(243, 168, 224, 0.35); animation-delay: 0.6s; }
-.tu-mic { width: 76px; height: 76px; border-radius: 50%; background: #ffffff; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 0 10px rgba(139, 108, 240, 0.08), 0 10px 30px rgba(139, 108, 240, 0.25); animation: tu-pulse 2.6s ease-in-out infinite; }
-@keyframes tu-breathe { 0%, 100% { opacity: 0.55; transform: scaleX(0.94); } 50% { opacity: 1; transform: scaleX(1); } }
-@keyframes tu-pulse { 0%, 100% { box-shadow: 0 0 0 8px rgba(139, 108, 240, 0.07), 0 10px 30px rgba(139, 108, 240, 0.22); } 50% { box-shadow: 0 0 0 16px rgba(139, 108, 240, 0.12), 0 10px 34px rgba(139, 108, 240, 0.32); } }
-.tu-status { margin-top: 10px; padding: 14px 18px; border-radius: 16px; text-align: center; font-size: 0.98rem; font-weight: 500; }
+.st-key-recwrap { position: relative; margin: 22px 0 6px 0; }
+.tu-wave { display: flex; align-items: center; height: 96px; gap: 18px; }
+.tu-side { flex: 1; display: flex; align-items: center; justify-content: space-between; height: 96px; }
+.tu-bar { width: 3px; height: 3px; border-radius: 99px; opacity: var(--o); }
+.tu-side.left .tu-bar { background: linear-gradient(180deg, #b9d3ff, #8fa8ff); }
+.tu-side.right .tu-bar { background: linear-gradient(180deg, #f6b4e6, #ee8fd6); }
+.tu-mic { position: relative; width: 76px; height: 76px; flex: none; border-radius: 50%; background: #ffffff; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 0 10px rgba(139, 108, 240, 0.08), 0 10px 30px rgba(139, 108, 240, 0.25); transition: transform 0.2s, background 0.3s; }
+.tu-micsvg { display: flex; }
+.tu-mic .tu-stop { display: none; }
+.tu-rec-txt { display: none; }
+.stApp:has([data-testid="stAudioInputActionButton"][aria-label="Record"]:hover) .tu-mic { transform: scale(1.06); }
+.stApp:has([aria-label="Stop recording"]) .tu-bar, .stApp:has(.tu-busy) .tu-bar { animation: tu-bar 1s ease-in-out infinite; animation-delay: calc(var(--i) * -0.09s); }
+.stApp:has([aria-label="Stop recording"]) .tu-mic { background: linear-gradient(135deg, #8b6cf0, #e58be0); animation: tu-pulse 1.4s ease-in-out infinite; }
+.stApp:has([aria-label="Stop recording"]) .tu-micsvg { display: none; }
+.stApp:has([aria-label="Stop recording"]) .tu-mic .tu-stop { display: flex; }
+.stApp:has([aria-label="Stop recording"]) .tu-txt { display: none; }
+.stApp:has([aria-label="Stop recording"]) .tu-rec-txt { display: inline; }
+@keyframes tu-bar { 0%, 100% { height: 3px; } 50% { height: var(--h); } }
+@keyframes tu-pulse { 0%, 100% { box-shadow: 0 0 0 8px rgba(229, 139, 224, 0.18), 0 10px 30px rgba(139, 108, 240, 0.30); } 50% { box-shadow: 0 0 0 18px rgba(229, 139, 224, 0.10), 0 10px 36px rgba(139, 108, 240, 0.40); } }
+[class*="st-key-rec_"] { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); width: 76px; height: 76px; z-index: 6; margin: 0; }
+[class*="st-key-rec_"] [data-testid="stAudioInput"] { position: relative; width: 76px; height: 76px; min-height: 0; padding: 0; margin: 0; border: none; background: transparent; opacity: 0; overflow: hidden; border-radius: 50%; }
+[class*="st-key-rec_"] [data-testid="stAudioInputActionButton"] { position: absolute; top: 0; left: 0; width: 76px; height: 76px; border-radius: 50%; cursor: pointer; }
+[class*="st-key-rec_"] [data-testid="stAudioInputActionButton"]:not([aria-label="Record"]):not([aria-label="Stop recording"]) { display: none; }
+[class*="st-key-rec_"] [data-testid="stAudioInput"] * { pointer-events: none; }
+[class*="st-key-rec_"] [data-testid="stAudioInputActionButton"] { pointer-events: auto; }
+[class*="st-key-rec_"] [data-testid="stAudioInputWaveSurfer"], [class*="st-key-rec_"] [data-testid="stAudioInputWaveformTimeCode"] { display: none; }
+.tu-status { word-break: keep-all; margin-top: 30px; padding: 14px 18px; border-radius: 16px; text-align: center; font-size: 0.98rem; font-weight: 500; }
 .tu-idle { background: #f1ecff; color: #5b45c4; }
 .tu-busy { background: #ece4ff; color: #6b52d9; }
 .tu-done { background: #fdeef8; color: #b0408f; }
 .tu-error { background: #ffe9ef; color: #c0364f; }
-[data-testid="stAudioInput"] > div, [data-testid="stAudioInput"] { border-radius: 18px; }
-[data-testid="stAudioInput"] > div { background: #f3f0fb; border: 1px solid #ebe5fa; }
 [data-testid="stFileUploader"] section { background: #f6f4fb; border: 1px dashed #d9d0f5; border-radius: 18px; }
 [data-testid="stFileUploader"] label p { color: #5b5877; font-size: 0.9rem; font-weight: 500; }
 [data-testid="stFileUploader"] button { border-radius: 12px; border: 1px solid #d9d0f5; color: #6b52d9; background: #ffffff; }
@@ -438,17 +488,46 @@ MIC_SVG = (
     '<line x1="12" y1="18" x2="12" y2="22"></line></svg>'
 )
 
+STOP_SVG = (
+    '<svg width="28" height="28" viewBox="0 0 24 24">'
+    '<rect x="5" y="5" width="14" height="14" rx="3" fill="#ffffff"></rect></svg>'
+)
+
+
+def build_bars(side, n=30):
+    """파형 막대 생성. 원에 가까울수록 높고, 안쪽에서 바깥쪽으로 물결이 퍼짐"""
+    bars = ""
+    for p in range(n):
+        # 왼쪽은 바깥→안쪽, 오른쪽은 안쪽→바깥 순서로 배치
+        near = p / (n - 1) if side == "left" else 1 - p / (n - 1)
+        dist = n - 1 - p if side == "left" else p
+        shift = 0 if side == "left" else 1.3
+        wobble = 0.55 + 0.45 * abs(math.sin(dist * 1.7 + shift))
+        height = int(6 + 44 * (near ** 1.4) * wobble)
+        opacity = round(0.25 + 0.75 * near, 2)
+        bars += (
+            '<span class="tu-bar" style="--h:' + str(height) + 'px;--o:' + str(opacity)
+            + ';--i:' + str(dist) + '"></span>'
+        )
+    return '<div class="tu-side ' + side + '">' + bars + '</div>'
+
+
 WAVE_HTML = (
-    '<div class="tu-wave"><div class="tu-line left"></div>'
-    '<div class="tu-mic">' + MIC_SVG + '</div>'
-    '<div class="tu-line right"></div></div>'
+    '<div class="tu-wave">' + build_bars("left")
+    + '<div class="tu-mic"><span class="tu-micsvg">' + MIC_SVG + '</span>'
+    + '<span class="tu-stop">' + STOP_SVG + '</span></div>'
+    + build_bars("right") + '</div>'
 )
 
 
 def show_status(placeholder, kind, text):
     """하단 안내 배너 갱신 (kind: idle / busy / done / error)"""
+    inner = '<span class="tu-txt">' + html.escape(text) + '</span>'
+    if kind in ("idle", "done"):
+        # 녹음 중일 때만 보이는 문구 (CSS가 자동으로 전환)
+        inner += '<span class="tu-rec-txt">🔴 녹음 중이에요. 다시 누르면 끝나요</span>'
     placeholder.markdown(
-        '<div class="tu-status tu-' + kind + '">' + html.escape(text) + '</div>',
+        '<div class="tu-status tu-' + kind + '">' + inner + '</div>',
         unsafe_allow_html=True,
     )
 
@@ -460,6 +539,7 @@ st.session_state.setdefault("show_settings", False)
 st.session_state.setdefault("pref_mode", ANSWER_MODES[0])
 st.session_state.setdefault("pref_voice", "nova")
 st.session_state.setdefault("audio_n", 0)
+st.session_state.setdefault("memo_n", 0)
 
 # ---------------------------------------------------------
 # 사이드 메뉴 (추후 기능은 MENU_ITEMS에 한 줄씩 추가)
@@ -505,15 +585,27 @@ left, right = st.columns([3, 2], gap="large")
 
 with left:
     card_ph = st.empty()  # 결과 카드 자리 (처리 후 아래에서 채움)
-    st.markdown(WAVE_HTML, unsafe_allow_html=True)
 
-    mic_col, up_col = st.columns([1.15, 1], gap="medium")
-    with mic_col:
-        n = str(st.session_state["audio_n"])
-        audio = st.audio_input("질문 녹음", key="audio_" + n, label_visibility="collapsed")
+    # 큰 마이크 버튼 = 실제 녹음 버튼
+    # (기본 녹음창은 투명하게 큰 버튼 위에 겹쳐 두어, 큰 버튼을 누르면 녹음이 시작됨)
+    with st.container(key="recwrap"):
+        st.markdown(WAVE_HTML, unsafe_allow_html=True)
+        audio = st.audio_input(
+            "질문 녹음",
+            key="rec_" + str(st.session_state["audio_n"]),
+            label_visibility="collapsed",
+        )
+
+    status_col, up_col = st.columns([1.15, 1], gap="medium")
+    with status_col:
         status_ph = st.empty()
+        error_ph = st.empty()
     with up_col:
-        memo_file = st.file_uploader("파일 업로드", type=["txt"], key="memo_" + n)
+        memo_file = st.file_uploader(
+            "파일 업로드",
+            type=["txt", "jpg", "jpeg", "png"],
+            key="memo_" + str(st.session_state["memo_n"]),
+        )
 
 with right:
     if st.session_state["show_settings"]:
@@ -543,8 +635,9 @@ with right:
             st.markdown('<div class="tu-panel-sec">기타 설정</div>', unsafe_allow_html=True)
             if st.button("새 대화 시작", key="new_chat", width="stretch"):
                 st.session_state["audio_n"] += 1
+                st.session_state["memo_n"] += 1
                 st.session_state.pop("result", None)
-                st.session_state.pop("last_audio", None)
+                st.session_state.pop("error", None)
                 st.rerun()
             st.caption("설정은 현재 브라우저 세션에서 유지됩니다.")
     else:
@@ -561,67 +654,80 @@ with right:
 # ---------------------------------------------------------
 # 안내 배너 초기 상태
 # ---------------------------------------------------------
-if "result" in st.session_state:
-    show_status(status_ph, "done", "다시 질문하려면 녹음 버튼을 눌러주세요")
+if st.session_state.get("error"):
+    show_status(status_ph, "error", "⚠️ 처리 중 문제가 생겼어요. 다시 녹음해 주세요.")
+    error_ph.error(st.session_state["error"])
+elif "result" in st.session_state:
+    elapsed_text = st.session_state["result"].get("elapsed", "")
+    show_status(status_ph, "done", "✅ 완료 (" + elapsed_text + "초) · 다시 질문하려면 마이크 버튼을 눌러주세요")
 else:
-    show_status(status_ph, "idle", "녹음 버튼을 눌러 질문해주세요")
+    show_status(status_ph, "idle", "마이크 버튼을 눌러 질문해주세요")
 
 # ---------------------------------------------------------
 # 질문 처리
 # ---------------------------------------------------------
 if audio is not None:
-    # 같은 녹음을 중복 처리하지 않도록 확인
-    audio_bytes = audio.getvalue()
-    if st.session_state.get("last_audio") != audio_bytes:
-        st.session_state["last_audio"] = audio_bytes
-        st.session_state.pop("result", None)
+    st.session_state.pop("result", None)
+    st.session_state.pop("error", None)
+    error_ph.empty()
+    error_message = None
 
-        try:
-            start = time.time()
+    try:
+        start = time.time()
 
-            show_status(status_ph, "busy", "🎧 질문을 듣고 있어요...")
-            question = speech_to_text(audio)
+        show_status(status_ph, "busy", "🎧 질문을 듣고 있어요...")
+        question = speech_to_text(audio)
 
-            show_status(status_ph, "busy", "🌍 지역과 날씨를 확인하고 있어요...")
-            location = extract_location(question)
+        show_status(status_ph, "busy", "🌍 지역과 날씨를 확인하고 있어요...")
+        location = extract_location(question)
 
-            if not location["korean"]:
-                # 질문에서 지역을 알아듣지 못한 경우
-                answer = "지역을 알아듣지 못했어요. 어느 지역의 날씨가 궁금한지 다시 말씀해 주세요."
+        if not location["korean"]:
+            # 질문에서 지역을 알아듣지 못한 경우
+            answer = "지역을 알아듣지 못했어요. 어느 지역의 날씨가 궁금한지 다시 말씀해 주세요."
+        else:
+            geo = geocode(location)
+            if geo is None:
+                # 지역명은 알아들었지만 검색에서 찾지 못한 경우
+                answer = location["korean"] + " 지역은 찾지 못했어요. 지역 이름을 다시 말씀해 주세요."
             else:
-                geo = geocode(location)
-                if geo is None:
-                    # 지역명은 알아들었지만 검색에서 찾지 못한 경우
-                    answer = location["korean"] + " 지역은 찾지 못했어요. 지역 이름을 다시 말씀해 주세요."
-                else:
-                    weather = get_weather(geo["lat"], geo["lon"])
-                    air = get_air_quality(geo["lat"], geo["lon"])
-                    summary = build_weather_summary(geo["name"], weather, air)
+                weather = get_weather(geo["lat"], geo["lon"])
+                air = get_air_quality(geo["lat"], geo["lon"])
+                summary = build_weather_summary(geo["name"], weather, air)
 
-                    memo_text = ""
-                    if memo_file is not None:
+                # 첨부 파일: txt는 메모로, jpg/png는 이미지로 전달
+                memo_text = ""
+                image = None
+                if memo_file is not None:
+                    if memo_file.name.lower().endswith(".txt"):
                         memo_text = memo_file.getvalue().decode("utf-8", errors="ignore")[:3000]
+                    else:
+                        image = prepare_image(memo_file)
 
-                    show_status(status_ph, "busy", "📝 답변을 작성하고 있어요...")
-                    answer = make_answer(question, summary, memo_text)
+                show_status(status_ph, "busy", "📝 답변을 작성하고 있어요...")
+                answer = make_answer(question, summary, memo_text, image)
 
-            mp3 = None
-            if st.session_state["pref_mode"] != "텍스트만":
-                show_status(status_ph, "busy", "🔊 음성을 만들고 있어요...")
-                mp3 = text_to_speech(answer, st.session_state["pref_voice"])
+        mp3 = None
+        if st.session_state["pref_mode"] != "텍스트만":
+            show_status(status_ph, "busy", "🔊 음성을 만들고 있어요...")
+            mp3 = text_to_speech(answer, st.session_state["pref_voice"])
 
-            st.session_state["result"] = {
-                "question": question,
-                "answer": answer,
-                "mp3": mp3,
-                "played": False,
-            }
-            elapsed = str(round(time.time() - start, 1))
-            show_status(status_ph, "done", "✅ 완료 (" + elapsed + "초) · 다시 질문하려면 녹음 버튼을 눌러주세요")
+        st.session_state["result"] = {
+            "question": question,
+            "answer": answer,
+            "mp3": mp3,
+            "played": False,
+            "elapsed": str(round(time.time() - start, 1)),
+        }
 
-        except Exception as e:
-            show_status(status_ph, "error", "⚠️ 처리 중 문제가 생겼어요. 다시 녹음해 주세요.")
-            st.error(str(e))
+    except Exception as e:
+        error_message = str(e)
+
+    if error_message:
+        st.session_state["error"] = error_message
+
+    # 녹음창을 새것으로 바꿔서, 큰 버튼이 다시 '녹음 대기' 상태가 되게 함
+    st.session_state["audio_n"] += 1
+    st.rerun()
 
 # ---------------------------------------------------------
 # 결과 카드 출력 (텍스트 + 음성 동시)
