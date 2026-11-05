@@ -492,9 +492,8 @@ CSS += ".tu-badge { white-space: nowrap; flex: none; margin-left: 8px; }\n"
 CSS += ".tu-title { font-size: clamp(1.8rem, 3.8vw, 3.1rem); }\n"
 
 if st.session_state["show_sidebar"]:
-    # 사이드 메뉴가 열리면 본문이 좁아지므로 제목과 비서 이미지를 조금 줄임
-    CSS += ".tu-title { font-size: clamp(1.8rem, 2.7vw, 3.1rem); }\n"
-    CSS += ".st-key-hero { width: min(30vw, 70vh); }\n"
+    # 사이드 메뉴가 본문을 밀지 않고, 본문 위에 겹쳐서 열리게 함
+    CSS += '[data-testid="stSidebar"] { position: fixed !important; top: 0 !important; left: 0 !important; height: 100vh !important; box-shadow: 12px 0 48px rgba(139, 108, 240, 0.22); }\n'
 else:
     CSS += '[data-testid="stSidebar"] { display: none; }\n'
 
