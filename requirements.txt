@@ -1,2 +1,7 @@
 streamlit==1.64.0
 openai==3.16.2
+requests
+yfinance
+google-api-python-client
+google-auth
+pillow
