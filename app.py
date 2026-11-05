@@ -458,6 +458,10 @@ header[data-testid="stHeader"] { background: transparent; }
 [data-testid="stFileUploader"] button { border-radius: 12px; border: 1px solid #d9d0f5; color: #6b52d9; background: #ffffff; }
 .stButton > button { border-radius: 999px; border: 1px solid #e3dcf7; background: #ffffff; color: #6b52d9; font-weight: 600; padding: 0.55rem 1.1rem; box-shadow: 0 4px 14px rgba(139, 108, 240, 0.08); }
 .stButton > button:hover { border-color: #b9a6f5; background: #f5f1ff; color: #5b45c4; }
+
+.st-key-toggle_sidebar button { min-height: 42px; width: 100%; border-radius: 999px; border: 1px solid #e3dcf7; background: #ffffff; color: #6b52d9; font-weight: 600; padding: 0.55rem 0.6rem; box-shadow: 0 4px 14px rgba(139, 108, 240, 0.08); }
+.st-key-toggle_sidebar button:hover { border-color: #b9a6f5; background: #f5f1ff; color: #5b45c4; }
+
 .st-key-settings_panel { background: #ffffff; border: 1px solid #ece8f7; border-radius: 28px; box-shadow: 0 12px 40px rgba(139, 108, 240, 0.10); padding: 22px 24px; }
 .tu-panel-title { color: #1f2033; font-size: 1.25rem; font-weight: 800; padding-bottom: 12px; border-bottom: 1px solid #efebfa; margin-bottom: 16px; }
 .tu-panel-sec { color: #1f2033; font-size: 0.98rem; font-weight: 700; margin: 18px 0 6px 0; }
@@ -575,8 +579,7 @@ MENU_ITEMS = [
     ("✉️", "이메일 작성 및 발송", False),
 ]
 
-menu_html = '<div class="tu-brand">Thumbs Up<span>Voice AI Assistant</span></div>'
-menu_html += '<div class="tu-menu-title">기능</div>'
+menu_html = '<div class="tu-brand">Thumbs Up<span>나의 질</span></div>'
 for icon, name, enabled in MENU_ITEMS:
     if enabled:
         menu_html += '<div class="tu-menu-item active"><div>' + icon + ' ' + name + '</div></div>'
@@ -592,9 +595,14 @@ with st.sidebar:
 # ---------------------------------------------------------
 # 상단: 타이틀 + 설정 버튼
 # ---------------------------------------------------------
-head_left, head_right = st.columns([5, 1])
+head_left, head_menu, head_right = st.columns([7, 0.6, 1.5], gap="small")
 with head_left:
     st.markdown(TITLE_HTML, unsafe_allow_html=True)
+with head_menu:
+    menu_icon = ":material/menu_open:" if st.session_state["show_sidebar"] else ":material/menu:"
+    if st.button("", key="toggle_sidebar", icon=menu_icon, help="사이드 메뉴 열기/닫기", width="stretch"):
+        st.session_state["show_sidebar"] = not st.session_state["show_sidebar"]
+        st.rerun()
 with head_right:
     toggle_label = "설정 닫기 ✕" if st.session_state["show_settings"] else "⚙️ 설정"
     if st.button(toggle_label, key="toggle_settings", width="stretch"):
