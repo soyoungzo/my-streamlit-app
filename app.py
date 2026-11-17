@@ -9,6 +9,9 @@
 #         - API 호출이 없어 빠르고, 같은 주제는 표현이 달라도 확실히 함께 셈
 #         - 모든 사용자의 질문을 함께 세며, 앱이 재시작(Reboot)되면 0부터 다시 셈
 # 주석의 [주제별 TOP3] 표시로 해당 부분을 찾을 수 있어요.
+# 추가:   ★ [답변 평가] (소영 파일에서 가져옴) 👍/👎 평가 저장 · CSV 받기 · 만족도,
+#         히스토리를 질문 1개 = 1줄로 표시(만족/불만족 태그, 질문 삭제)
+# 주석의 ★ [답변 평가] 표시로 해당 부분을 찾을 수 있어요.
 # ════════════════════════════════════════════════════════
 # Streamlit Cloud의 sqlite 버전 문제 대비 (chromadb보다 먼저 실행돼야 함, Colab에서는 영향 없음)
 try:
@@ -24,10 +27,13 @@ import shutil      # [2차 수정 1] chroma_db 폴더를 지울 때 사용
 import tempfile
 import warnings
 from operator import itemgetter
+from datetime import datetime          # ★ [답변 평가] 평가한 시각 기록용
+from zoneinfo import ZoneInfo          # ★ [답변 평가] 한국 시간으로 기록하기 위해
 
 import threading                 # [주제별 TOP3] 여러 사용자가 동시에 질문해도 횟수가 꼬이지 않게 잠금
 from collections import Counter  # [주제별 TOP3] 주제별 질문 횟수 세기
 
+import pandas as pd                    # ★ [답변 평가] 평가 결과를 표(CSV)로 만들기 위해
 import streamlit as st
 
 warnings.filterwarnings(action="ignore")
@@ -131,7 +137,10 @@ SYSTEM_TEMPLATE = """
 - 항목이 3개 이상이면 글머리표로 정리하세요.
 - 답변 끝에 근거가 된 쪽 번호를 (근거: p.3, p.5)처럼 적으세요.
 - 친절하고 격려하는 말투로, 존댓말을 쓰세요.
-""".strip()
+
+[문서]
+{context}
+""".strip()   # [통합 수정] 빠져 있던 [문서] {context}를 다시 넣음 → 검색된 백서 문단이 모델에 전달됨
 
 prompt = ChatPromptTemplate.from_messages([
     ("system", SYSTEM_TEMPLATE),
@@ -355,9 +364,11 @@ ss = st.session_state
 ss.setdefault("rag_chain", None)
 ss.setdefault("file_hash", None)
 ss.setdefault("file_name", None)
+ss.setdefault("file_data", None)
 ss.setdefault("chats", {})        # {대화ID: {"title": 제목, "messages": [...]}}
 ss.setdefault("current_id", None)
 ss.setdefault("is_admin", False)  # [수정 2] 관리자 인증 여부 (비밀번호를 맞히면 True)
+ss.setdefault("feedback", {})     # ★ [답변 평가] {"답변ID": {평가 한 줄}} — CSV로 저장될 내용
 
 
 def new_chat():
@@ -414,6 +425,7 @@ def build_chain(uploaded_file):
                 ss.rag_chain = rag_pipeline(tmp_path)
         ss.file_hash = file_hash
         ss.file_name = uploaded_file.name
+        ss.file_data = data
     finally:
         os.remove(tmp_path)
 
@@ -451,6 +463,23 @@ def admin_dialog():
             else:
                 st.rerun()   # 팝업을 닫고 화면 전체를 새로 그림 (배지·입력창 활성화)
 
+        # ★ [답변 평가] 관리자만 보는 만족도 + CSV 다운로드
+        st.divider()
+        df = feedback_df()
+        total = len(df)                              # 평가한 답변 수
+        good = int((df["점수"] == 1).sum())          # 👍 받은 답변 수
+        rate = round(good / total * 100) if total > 0 else 0   # 만족도(%)
+
+        st.markdown(f"**답변 만족도**  {rate}% ({good}/{total})")
+        st.download_button(
+            "⬇️  평가 결과 CSV 받기",
+            data=df.to_csv(index=False).encode("utf-8-sig"),
+            file_name="feedback.csv",
+            mime="text/csv",
+            width="stretch",
+            disabled=total == 0,                     # 평가가 하나도 없으면 비활성화
+        )
+
 
 def ask(question):
     try:
@@ -479,6 +508,152 @@ def show_sources(sources):
         st.markdown(", ".join(f"**{p}**" for p in pages))
 
 
+# ════════════════════════════════════════════════════════
+# ★ [답변 평가] 👍/👎 평가를 저장하고 CSV로 만드는 부분
+# ════════════════════════════════════════════════════════
+
+FEEDBACK_FILE = "feedback.csv"                                   # 저장할 파일 이름
+FEEDBACK_COLUMNS = ["평가시각", "대화제목", "질문", "답변", "평가", "점수"]   # CSV 열 순서
+
+
+def get_feedback():
+    """평가 장부를 꺼내 줍니다. 장부가 없으면(앱 재시작·재배포 직후 등) 빈 장부를 새로 만들어 줍니다.
+
+    ss.feedback 처럼 바로 꺼내면 장부가 없을 때 AttributeError가 나기 때문에,
+    평가 장부는 항상 이 함수로만 꺼내 씁니다.
+    """
+    return ss.setdefault("feedback", {})
+
+
+def feedback_df():
+    """지금까지 받은 평가를 표(DataFrame)로 만들어 돌려줍니다."""
+    rows = list(get_feedback().values())
+    return pd.DataFrame(rows, columns=FEEDBACK_COLUMNS)
+
+
+def save_feedback_csv():
+    """평가 표를 feedback.csv 파일로 저장합니다. (엑셀에서 한글이 안 깨지도록 utf-8-sig)"""
+    feedback_df().to_csv(FEEDBACK_FILE, index=False, encoding="utf-8-sig")
+
+
+def msg_id(m):
+    """메시지의 고유 ID를 돌려줍니다. 없으면 새로 만들어 붙입니다.
+
+    질문을 삭제하면 메시지 순서(0, 1, 2...)가 당겨지기 때문에,
+    순서 번호 대신 절대 바뀌지 않는 ID로 메시지를 구분합니다.
+    """
+    return m.setdefault("id", uuid.uuid4().hex[:8])
+
+
+def find_index(messages, target_id):
+    """메시지 목록에서 ID가 target_id인 메시지가 몇 번째인지 찾습니다. 없으면 None."""
+    for i, m in enumerate(messages):
+        if m.get("id") == target_id:
+            return i
+    return None
+
+
+def save_rating(chat_id, answer_id, value):
+    """👍/👎 버튼의 값이 바뀌었을 때 평가를 저장하는 함수입니다.
+
+    chat_id   : 어떤 대화인지
+    answer_id : 평가한 답변의 고유 ID
+    value     : 버튼 값 (1 = 👍, 0 = 👎, None = 평가 취소)
+    """
+
+    chat = ss.chats.get(chat_id)
+    if chat is None:
+        return
+    messages = chat["messages"]
+    idx = find_index(messages, answer_id)
+    if idx is None:
+        return
+    messages[idx]["rating"] = value    # 히스토리에 표시하려고 답변 메시지 안에도 적어 둠
+
+    # 답변 ID가 장부의 이름표 → 평가를 바꾸면 덮어쓰기(중복 X)
+    if value is None:
+        get_feedback().pop(answer_id, None)
+    else:
+        get_feedback()[answer_id] = {
+            "평가시각": datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M:%S"),
+            "대화제목": chat["title"],
+            "질문": messages[idx - 1]["content"],   # 답변 바로 앞 메시지가 질문
+            "답변": messages[idx]["content"],
+            "평가": "만족" if value == 1 else "불만족",
+            "점수": value,                            # 만족도 계산용 숫자 (1 또는 0)
+        }
+
+    save_feedback_csv()
+
+
+def rating_tag(rating):
+    """평가 값(1, 0, None)을 히스토리용 태그로 바꿔 줍니다. 평가 안 했으면 빈 문자열."""
+    if rating == 1:
+        return '<span class="rate-tag good">만족</span>'
+    if rating == 0:
+        return '<span class="rate-tag bad">불만족</span>'
+    return ""
+
+
+def history_items():
+    """모든 대화의 질문을 하나씩 꺼내 '히스토리 목록'을 만듭니다. (최신 질문이 맨 위)
+
+    목록 한 줄 = 질문 1개이고, 그 질문 바로 다음 답변의 평가를 함께 담습니다.
+    """
+    items = []
+    for chat_id, chat in ss.chats.items():
+        messages = chat["messages"]
+        for i, m in enumerate(messages):
+            if m["role"] != "user":
+                continue
+            has_answer = i + 1 < len(messages) and messages[i + 1]["role"] == "assistant"
+            answer = messages[i + 1] if has_answer else None
+            items.append({
+                "chat_id": chat_id,
+                "question": m,
+                "answer": answer,
+                "rating": answer.get("rating") if answer else None,
+            })
+    # seq = 질문한 순서 번호 → 큰 번호(최신)가 위로
+    items.sort(key=lambda it: it["question"].get("seq", 0), reverse=True)
+    return items
+
+
+def delete_question(chat_id, question_id):
+    """히스토리 목록의 ✕ 버튼: 질문 1개와 그 답변을 대화에서 지웁니다.
+
+    평가 장부(CSV)의 기록은 결과 보고서용이므로 지우지 않고 남겨 둡니다.
+    """
+    chat = ss.chats.get(chat_id)
+    if chat is None:
+        return
+    messages = chat["messages"]
+    i = find_index(messages, question_id)
+    if i is None:
+        return
+
+    # 지울 범위: 질문 + (있으면) 바로 다음 답변
+    end = i + 2 if i + 1 < len(messages) and messages[i + 1]["role"] == "assistant" else i + 1
+    for m in messages[i:end]:
+        ss.pop(f"fb_{m.get('id')}", None)        # 지운 답변의 버튼 상태도 정리
+    del messages[i:end]
+
+    if ss.get("selected_q") == question_id:
+        ss.selected_q = None
+
+    remaining = [m for m in messages if m["role"] == "user"]
+    if remaining:
+        chat["title"] = remaining[0]["content"][:20]   # 첫 질문이 지워졌으면 제목도 다음 질문으로
+    elif chat_id == ss.current_id:
+        chat["title"] = "새 대화"                       # 보고 있던 대화는 빈 대화로 남김
+    else:
+        delete_chat(chat_id)                            # 질문이 하나도 안 남은 다른 대화는 정리
+
+
+# ★ [답변 평가] 히스토리 목록에서 강조할 질문 (지금 보고 있는 대화 안에 있을 때만)
+selected = ss.get("selected_q")
+active_q = selected if find_index(ss.chats[ss.current_id]["messages"], selected) is not None else "none"
+
 # ── 스타일 ──────────────────────────────────────────────
 st.markdown(f"""
 <style>
@@ -500,11 +675,60 @@ st.markdown(f"""
 [data-testid="stSidebar"] .st-key-nav_admin {{ position: fixed; bottom: 1.2rem; }}
 
 /* 사이드바 하단 문서 카드 */
-.doc-card {{
-    margin-top: 1.5rem; padding: 12px 14px; border: 1px solid rgba(0,0,0,0.1);
-    border-radius: 12px; font-size: 0.85rem; line-height: 1.4;
+.st-key-doc_download {{ position: relative; top: 14px; }}
+.st-key-doc_card {{
+    margin-top: 1.5rem; padding: 12px 14px 28px; border: 1px solid rgba(0,0,0,0.1);
+    border-radius: 12px;
 }}
+.doc-card {{ font-size: 0.85rem; line-height: 1.4; word-break: break-all; }}
 .doc-card .label {{ color: #888; font-size: 0.75rem; }}
+.st-key-doc_download button {{ padding: 2px 8px; min-height: 0; font-size: 1.1rem; color: #555; }}
+
+/* ★ [답변 평가] 히스토리 카드의 만족/불만족 태그 */
+.rate-tag {{
+    display: inline-block; font-size: 0.72rem; font-weight: 600;
+    padding: 1px 8px; border-radius: 999px; line-height: 1.6;
+}}
+.rate-tag.good {{ background: #e6f4ea; color: #1e7b34; }}
+.rate-tag.bad  {{ background: #fdecea; color: #b42318; }}
+
+/* ★ [답변 평가] 히스토리 목록: 한 줄 = 질문 1개 (질문 · 태그 · ✕) */
+[class*="st-key-hrow_"] {{
+    padding: 0 6px 0 12px; border-radius: 10px; gap: 6px; flex-wrap: nowrap;
+}}
+[class*="st-key-hrow_"]:hover {{ background: rgba(0,0,0,0.04); }}
+.st-key-hrow_{active_q} {{ background: #f1f2f4; }}
+.st-key-hrow_{active_q} [class*="st-key-hopen_"] button p {{ font-weight: 600; }}
+[class*="st-key-hopen_"] {{ flex: 1 1 0; min-width: 0; }}
+[class*="st-key-hopen_"] button {{
+    justify-content: flex-start; padding: 8px 0; min-height: 0; color: inherit; width: 100%;
+}}
+[class*="st-key-hopen_"] button > div {{ justify-content: flex-start; width: 100%; min-width: 0; }}
+[class*="st-key-hopen_"] button p {{
+    width: 100%; text-align: left; font-size: 0.88rem;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}}
+[class*="st-key-hopen_"] button:hover {{ color: inherit; }}
+[class*="st-key-hdel_"] button {{ color: #aaa; padding: 0 2px; min-height: 0; }}
+[class*="st-key-hdel_"] button:hover {{ color: #e5484d; }}
+
+/* ★ [답변 평가] 채팅 답변 아래 👍/👎 버튼: 테두리 버튼으로 만들고, 눌린 버튼은 색을 꽉 채움 */
+[data-testid="stFeedback"] button {{
+    border: 1px solid rgba(0,0,0,0.15); border-radius: 8px;
+    padding: 4px 10px; background: #fff; color: #666;
+}}
+[data-testid="stFeedback"] button:hover {{ border-color: rgba(0,0,0,0.35); color: #333; }}
+[data-testid="stFeedback"] button[aria-label="Thumbs up"][aria-checked="true"] {{
+    background: #1e7b34 !important; border-color: #1e7b34 !important; color: #fff !important;
+}}
+[data-testid="stFeedback"] button[aria-label="Thumbs down"][aria-checked="true"] {{
+    background: #b42318 !important; border-color: #b42318 !important; color: #fff !important;
+}}
+/* 눌린 버튼의 아이콘은 속이 꽉 찬 모양으로 */
+[data-testid="stFeedback"] button[aria-checked="true"] [data-testid="stIconMaterial"] {{
+    font-variation-settings: "FILL" 1; color: #fff !important;
+}}
+[data-testid="stFeedback"] [role="radiogroup"] {{ gap: 6px; }}
 
 /* 상단 바 */
 .topbar {{
@@ -587,10 +811,18 @@ with st.sidebar:
         st.caption(f"🔧 {ss.top3_debug}")
 
     doc = ss.file_name or "아직 문서가 없어요"
-    st.markdown(
-        f'<div class="doc-card"><div class="label">적용된 문서</div>📄 {doc}</div>',
-        unsafe_allow_html=True,
-    )
+    with st.container(key="doc_card"):
+        d1, d2 = st.columns([5, 1], gap="small", vertical_alignment="center")
+        d1.markdown(
+            f'<div class="doc-card"><div class="label">적용된 문서</div>📄 {doc}</div>',
+            unsafe_allow_html=True,
+        )
+        if ss.file_data is not None:
+            d2.download_button(
+                "⬇", data=ss.file_data, file_name=ss.file_name, mime="application/pdf",
+                key="doc_download", help="백서 PDF 다운로드", type="tertiary",
+                on_click="ignore",   # 눌러도 화면을 다시 그리지 않고 파일만 내려받음
+            )
 
     # [수정 5] 관리자 모드 버튼 (누르면 비밀번호 팝업이 열림)
     if st.button("관리자 모드  →", key="nav_admin", type="tertiary"):
@@ -610,28 +842,36 @@ st.markdown(
 # ── 본문: 채팅(가운데) · 히스토리(오른쪽) ───────────────
 chat_col, hist_col = st.columns([3, 1], gap="large")
 
-# 오른쪽: 히스토리 카드
+# 오른쪽: 히스토리 목록 (★ [답변 평가] 대화 카드 대신 질문 1개 = 1줄)
 with hist_col:
-    st.markdown(f"**히스토리** <span style='color:#999'>({len(ss.chats)})</span>",
+    items = history_items()
+    if keyword:   # 대화 검색: 질문이나 답변에 검색어가 있는 줄만
+        items = [it for it in items
+                 if keyword in it["question"]["content"]
+                 or (it["answer"] and keyword in it["answer"]["content"])]
+
+    st.markdown(f"**히스토리** <span style='color:#999'>({len(items)})</span>",
                 unsafe_allow_html=True)
-    for chat_id, chat in reversed(list(ss.chats.items())):
-        text = chat["title"] + " ".join(m["content"] for m in chat["messages"])
-        if keyword and keyword not in text:
-            continue
+    if not items:
+        st.caption("아직 질문이 없어요")
 
-        answers = [m["content"] for m in chat["messages"] if m["role"] == "assistant"]
-        preview = answers[-1] if answers else "아직 대화가 없어요"
-        preview = " ".join(preview.split())   # 줄바꿈 없이 한 줄로
+    for it in items:
+        q = it["question"]
+        q_id = msg_id(q)
+        q_text = " ".join(q["content"].split())    # 줄바꿈 없이 한 줄로
 
-        with st.container(key=f"card_{chat_id}"):
-            c1, c2 = st.columns([6, 1], gap="small", vertical_alignment="center")
-            if c1.button(chat["title"], key=f"open_{chat_id}", width="stretch", type="tertiary"):
-                ss.current_id = chat_id
+        # 한 줄 안에 [질문 ......] [태그] [✕] 를 가로로 배치
+        with st.container(key=f"hrow_{q_id}", horizontal=True, vertical_alignment="center"):
+            if st.button(q_text, key=f"hopen_{q_id}", type="tertiary", width="stretch"):
+                ss.current_id = it["chat_id"]      # 이 질문이 있는 대화를 열고
+                ss.selected_q = q_id               # 목록에서 이 줄을 강조
                 st.rerun()
-            if c2.button("✕", key=f"del_{chat_id}", help="대화 삭제", type="tertiary"):
-                delete_chat(chat_id)
+            tag = rating_tag(it["rating"])
+            if tag:
+                st.markdown(tag, unsafe_allow_html=True, width="content")
+            if st.button("✕", key=f"hdel_{q_id}", help="질문 삭제", type="tertiary"):
+                delete_question(it["chat_id"], q_id)
                 st.rerun()
-            st.caption(preview)
 
 # 가운데: 대화 영역 + 다시 생성 + 입력창
 with chat_col:
@@ -663,7 +903,18 @@ with chat_col:
                 st.markdown(msg["content"])
                 if msg["role"] == "assistant":
                     show_sources(msg.get("sources", []))  # 수정: 이전 답변의 근거 유지
-                    st.feedback("thumbs", key=f"fb_{ss.current_id}_{idx}")
+                    # ★ [답변 평가] 답변마다 👍/👎 버튼 (답변 고유 ID로 구분)
+                    a_id = msg_id(msg)
+                    fb_key = f"fb_{a_id}"
+                    # 다른 대화를 보다가 돌아오면 버튼 상태가 지워지므로, 저장해 둔 평가로 되살림
+                    if fb_key not in ss and msg.get("rating") is not None:
+                        ss[fb_key] = msg["rating"]
+                    # 버튼이 돌려주는 값(1, 0, None)을 바로 받아서 사용
+                    new_value = st.feedback("thumbs", key=fb_key)
+                    # 저장된 평가와 다르면 = 방금 버튼을 눌렀다는 뜻 → 저장하고 화면 새로 그리기
+                    if new_value != msg.get("rating"):
+                        save_rating(ss.current_id, a_id, new_value)
+                        st.rerun()   # 히스토리 태그를 바로 갱신
 
         if regenerate:
             last_q = next(m["content"] for m in reversed(current["messages"]) if m["role"] == "user")
@@ -673,6 +924,12 @@ with chat_col:
                 # 수정: 다시 생성할 때 답변과 근거 모두 갱신
                 current["messages"][-1]["content"] = new_answer["answer"]
                 current["messages"][-1]["sources"] = new_answer["sources"]
+                # ★ [답변 평가] 답변이 바뀌었으니 예전 평가는 지움
+                last_id = msg_id(current["messages"][-1])
+                current["messages"][-1]["rating"] = None
+                ss.pop(f"fb_{last_id}", None)
+                get_feedback().pop(last_id, None)
+                save_feedback_csv()
             st.rerun()
 
         if question:
@@ -680,7 +937,11 @@ with chat_col:
             if not current["messages"]:
                 current["title"] = question[:20]
 
-            current["messages"].append({"role": "user", "content": question})
+            # ★ [답변 평가] 질문마다 고유 ID와 질문 순서(seq)를 붙임 → 히스토리 정렬·강조에 사용
+            ss.q_seq = ss.get("q_seq", 0) + 1
+            q_msg = {"role": "user", "content": question, "seq": ss.q_seq}
+            current["messages"].append(q_msg)
+            ss.selected_q = msg_id(q_msg)
             with st.chat_message("user"):
                 st.markdown(question)
 
@@ -695,6 +956,7 @@ with chat_col:
                 "role": "assistant",
                 "content": result["answer"],
                 "sources": result["sources"],
+                "rating": None,   # ★ [답변 평가] 아직 평가 안 함
             })
             # [주제별 TOP3] 이 질문을 주제별 횟수에 반영
             # (ask()가 {"answer", "sources"}를 돌려주므로 답변 글자인 result["answer"]를 넘김)
