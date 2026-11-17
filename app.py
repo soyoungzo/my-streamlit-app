@@ -172,6 +172,7 @@ ss.setdefault("file_name", None)
 ss.setdefault("chats", {})        # {대화ID: {"title": 제목, "messages": [...]}}
 ss.setdefault("current_id", None)
 ss.setdefault("is_admin", False)  # [수정 2] 관리자 인증 여부 (비밀번호를 맞히면 True)
+ss.setdefault("feedback", {})     # [답변 평가] {"대화ID_번호": {평가 한 줄}} — CSV로 저장될 내용
 
 
 def new_chat():
@@ -295,6 +296,13 @@ def ask(question):
 FEEDBACK_FILE = "feedback.csv"                                   # 저장할 파일 이름
 FEEDBACK_COLUMNS = ["평가시각", "대화제목", "질문", "답변", "평가", "점수"]   # CSV 열 순서
 
+def get_feedback():
+    """평가 장부를 꺼내 줍니다. 장부가 없으면(앱 재시작·재배포 직후 등) 빈 장부를 새로 만들어 줍니다.
+
+    ss.feedback 처럼 바로 꺼내면 장부가 없을 때 AttributeError가 나기 때문에,
+    평가 장부는 항상 이 함수로만 꺼내 씁니다.
+    """
+    return ss.setdefault("feedback", {})
 
 def feedback_df():
     """지금까지 받은 평가를 표(DataFrame)로 만들어 돌려줍니다."""
