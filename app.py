@@ -552,7 +552,7 @@ with chat_col:
                         key=fb_key,
                         on_change=save_rating,          # 버튼을 누르면 save_rating 실행
                         args=(ss.current_id, idx),      # save_rating에 넘겨줄 값
-
+                    )
 
         if regenerate:
             last_q = next(m["content"] for m in reversed(current["messages"]) if m["role"] == "user")
